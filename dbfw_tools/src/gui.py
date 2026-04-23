@@ -116,6 +116,7 @@ class ScannerTab:
         self._file_statuses: dict[str, str] = {}
         self._preview_photo: ImageTk.PhotoImage | None = None
         self._countdown_var = tk.StringVar(value="")
+        self._closing = threading.Event()
 
         api_key = load_api_key()
         if api_key:
@@ -413,11 +414,26 @@ class ScannerTab:
 
     # ── Countdown ─────────────────────────────────────────────────────────────
 
+    def stop(self) -> None:
+        """Signal all background scanner threads to stop gracefully."""
+        self._closing.set()
+
+    def _safe_after(self, func, *args) -> None:
+        """Schedule func on the main thread; silently drop if app is closing."""
+        if self._closing.is_set():
+            return
+        try:
+            self._frame.after(0, func, *args)
+        except tk.TclError:
+            pass
+
     def _countdown_delay(self, seconds: int) -> None:
         for remaining in range(seconds, 0, -1):
-            self._frame.after(0, self._set_countdown_label, remaining)
+            if self._closing.is_set():
+                return
+            self._safe_after(self._set_countdown_label, remaining)
             time.sleep(1)
-        self._frame.after(0, self._set_countdown_label, 0)
+        self._safe_after(self._set_countdown_label, 0)
 
     def _set_countdown_label(self, remaining: int) -> None:
         self._countdown_var.set(f"Next image in {remaining}s…" if remaining > 0 else "")
@@ -615,8 +631,8 @@ class ScannerTab:
             messages = discord.fetch_image_messages(after_id=after_id)
         except DiscordError as exc:
             self._log.error("Discord fetch error: %s", exc)
-            self._frame.after(0, lambda e=exc: self._append_log(f"Discord error: {e}", "error"))
-            self._frame.after(0, self._finish_discord_fetch)
+            self._safe_after(lambda e=exc: self._append_log(f"Discord error: {e}", "error"))
+            self._safe_after(self._finish_discord_fetch)
             return
 
         if not messages:
@@ -666,20 +682,16 @@ class ScannerTab:
                 else:
                     msg = f"Unexpected API response: {str(body)[:200]}"
 
-                self._frame.after(0, lambda m=msg: self._append_log(f"Diagnostic: {m}", "error"))
+                self._safe_after(lambda m=msg: self._append_log(f"Diagnostic: {m}", "error"))
             except Exception as exc:
-                self._frame.after(
-                    0, lambda e=exc: self._append_log(f"Diagnostic failed: {e}", "error")
-                )
-            self._frame.after(0, self._finish_discord_fetch)
+                self._safe_after(lambda e=exc: self._append_log(f"Diagnostic failed: {e}", "error"))
+            self._safe_after(self._finish_discord_fetch)
             return
 
         self._log.info("Discord fetch: %d message(s) with images", len(messages))
-        self._frame.after(
-            0, lambda n=len(messages): self._append_log(
-                f"Found {n} message(s) with images.", "info"
-            )
-        )
+        self._safe_after(lambda n=len(messages): self._append_log(
+            f"Found {n} message(s) with images.", "info"
+        ))
 
         total_codes_added = 0
         processed_messages = 0
@@ -692,37 +704,29 @@ class ScannerTab:
             for att in attachments:
                 url = att["url"]
                 filename = att["filename"]
-                self._frame.after(
-                    0, lambda fn=filename: self._append_log(
-                        f"  Scanning discord/{fn}…", "info"
-                    )
-                )
+                self._safe_after(lambda fn=filename: self._append_log(
+                    f"  Scanning discord/{fn}…", "info"
+                ))
                 try:
                     raw = discord.download_attachment(url)
                     img = Image.open(io.BytesIO(raw)).convert("RGB")
                     codes = self._client.extract_codes(img)
                     if codes:
-                        self._frame.after(
-                            0, lambda fn=filename, c=len(codes): self._append_log(
-                                f"  discord/{fn}: {c} code(s) extracted, verifying…", "info"
-                            )
-                        )
+                        self._safe_after(lambda fn=filename, c=len(codes): self._append_log(
+                            f"  discord/{fn}: {c} code(s) extracted, verifying…", "info"
+                        ))
                         codes = self._client.verify_codes(img, codes)
                     added = self._add_codes(codes)
                     total_codes_added += added
                     self._log.info("discord/%s: %d code(s), %d new", filename, len(codes), added)
-                    self._frame.after(
-                        0, lambda fn=filename, c=len(codes), a=added: self._append_log(
-                            f"  discord/{fn}: {c} code(s) verified, {a} new.", "success"
-                        )
-                    )
+                    self._safe_after(lambda fn=filename, c=len(codes), a=added: self._append_log(
+                        f"  discord/{fn}: {c} code(s) verified, {a} new.", "success"
+                    ))
                 except Exception as exc:
                     self._log.error("discord/%s: %s", filename, exc, exc_info=True)
-                    self._frame.after(
-                        0, lambda fn=filename, e=exc: self._append_log(
-                            f"  Error on discord/{fn}: {e}", "error"
-                        )
-                    )
+                    self._safe_after(lambda fn=filename, e=exc: self._append_log(
+                        f"  Error on discord/{fn}: {e}", "error"
+                    ))
                     msg_success = False
 
             if msg_success:
@@ -732,20 +736,16 @@ class ScannerTab:
                     save_discord_last_message_id(msg_id, fetch_display)
                     processed_messages += 1
                     self._log.info("Discord message %s deleted", msg_id)
-                    self._frame.after(0, self._refresh_discord_section)
+                    self._safe_after(self._refresh_discord_section)
                 except DiscordError as exc:
                     self._log.error("Could not delete message %s: %s", msg_id, exc)
-                    self._frame.after(
-                        0, lambda e=exc: self._append_log(
-                            f"  Warning: could not delete Discord message ({e})", "error"
-                        )
-                    )
+                    self._safe_after(lambda e=exc: self._append_log(
+                        f"  Warning: could not delete Discord message ({e})", "error"
+                    ))
             else:
-                self._frame.after(
-                    0, lambda: self._append_log(
-                        "  Message preserved (scan error) — retry by fetching again.", "error"
-                    )
-                )
+                self._safe_after(lambda: self._append_log(
+                    "  Message preserved (scan error) — retry by fetching again.", "error"
+                ))
 
             if i < len(messages) - 1:
                 self._countdown_delay(int(BATCH_DELAY))
@@ -754,13 +754,13 @@ class ScannerTab:
             "Discord fetch complete: %d/%d messages, %d codes added",
             processed_messages, len(messages), total_codes_added,
         )
-        self._frame.after(
-            0, lambda n=processed_messages, t=len(messages), c=total_codes_added: self._append_log(
+        self._safe_after(
+            lambda n=processed_messages, t=len(messages), c=total_codes_added: self._append_log(
                 f"Discord fetch done: {n}/{t} message(s) processed, {c} new code(s) added.",
                 "success" if n > 0 else "info",
             )
         )
-        self._frame.after(0, self._finish_discord_fetch)
+        self._safe_after(self._finish_discord_fetch)
 
     def _finish_file_scan(self, total_added: int, total_paths: int) -> None:
         self._update_count()
@@ -793,39 +793,31 @@ class ScannerTab:
         total_added = 0
         for i, path in enumerate(paths, start=1):
             label = Path(path).name
-            self._frame.after(
-                0, lambda i=i, label=label: self._append_log(
-                    f"Scanning {i}/{len(paths)}: {label}", "info"
-                )
-            )
-            self._frame.after(0, lambda p=path: self._set_file_status(p, "scanning"))
+            self._safe_after(lambda i=i, label=label: self._append_log(
+                f"Scanning {i}/{len(paths)}: {label}", "info"
+            ))
+            self._safe_after(lambda p=path: self._set_file_status(p, "scanning"))
             try:
                 img = Image.open(path).convert("RGB")
                 codes = self._client.extract_codes(img)
                 if codes:
-                    self._frame.after(
-                        0, lambda c=len(codes), label=label: self._append_log(
-                            f"  {label}: {c} code(s) extracted, verifying…", "info"
-                        )
-                    )
+                    self._safe_after(lambda c=len(codes), label=label: self._append_log(
+                        f"  {label}: {c} code(s) extracted, verifying…", "info"
+                    ))
                     codes = self._client.verify_codes(img, codes)
                 added = self._add_codes(codes)
                 total_added += added
                 self._log.info("Image %s: found %s, added %d", label, codes, added)
-                self._frame.after(0, lambda p=path: self._set_file_status(p, "done"))
-                self._frame.after(
-                    0, lambda codes=codes, added=added, label=label: self._append_log(
-                        f"  {label}: {len(codes)} code(s) verified, {added} new.", "success"
-                    )
-                )
+                self._safe_after(lambda p=path: self._set_file_status(p, "done"))
+                self._safe_after(lambda codes=codes, added=added, label=label: self._append_log(
+                    f"  {label}: {len(codes)} code(s) verified, {added} new.", "success"
+                ))
             except Exception as exc:
                 self._log.error("Error scanning %s: %s", label, exc, exc_info=True)
-                self._frame.after(0, lambda p=path: self._set_file_status(p, "error"))
-                self._frame.after(
-                    0, lambda exc=exc, label=label: self._append_log(
-                        f"  Error on {label}: {exc}", "error"
-                    )
-                )
+                self._safe_after(lambda p=path: self._set_file_status(p, "error"))
+                self._safe_after(lambda exc=exc, label=label: self._append_log(
+                    f"  Error on {label}: {exc}", "error"
+                ))
                 time.sleep(1)
                 continue
 
@@ -833,7 +825,7 @@ class ScannerTab:
                 self._countdown_delay(int(BATCH_DELAY))
 
         self._log.info("Batch scan complete. Total new codes: %d", total_added)
-        self._frame.after(0, lambda: self._finish_file_scan(total_added, len(paths)))
+        self._safe_after(lambda: self._finish_file_scan(total_added, len(paths)))
 
     # ── Code management ───────────────────────────────────────────────────────
 
@@ -1189,18 +1181,27 @@ class RedeemerTab:
             tag = result if result in _REDEEMER_RESULT_COLOURS else "info"
             self._redeemer_log_line(f"[{current}/{total}]  {code}  →  {result}", tag)
 
-        self._container.after(0, _do)
+        try:
+            self._container.after(0, _do)
+        except tk.TclError:
+            pass
 
     def _on_done(self, summary: dict, results: list[tuple[str, str]]) -> None:
         self._results = results
-        self._container.after(0, lambda: self._build_summary(summary))
+        try:
+            self._container.after(0, lambda: self._build_summary(summary))
+        except tk.TclError:
+            pass
 
     def _on_error(self, msg: str) -> None:
         def _do() -> None:
             self._redeemer_log_line(f"⚠  {msg}", "warn")
             if "Stopped:" in msg or "Failsafe" in msg:
                 self._stop_btn.config(state="disabled")
-        self._container.after(0, _do)
+        try:
+            self._container.after(0, _do)
+        except tk.TclError:
+            pass
 
     def _stop_automation(self) -> None:
         if self._redeemer:
@@ -1369,6 +1370,7 @@ class _DBFWApp(_BaseClass):
         self._redeemer.load_codes_file(codes_path)
 
     def _on_close(self) -> None:
+        self._scanner.stop()
         if self._redeemer._redeemer:
             self._redeemer._redeemer.stop()
         self._log.info("Application closing")
