@@ -2,193 +2,297 @@
 
 A desktop application that scans Dragon Ball Fusion World card redemption codes from photos and automatically enters them into the game — end to end, with no manual typing.
 
----
-
-## Quick Start (Non-Technical Users)
-
-### Step 1 — Install Python
-
-Download and install **Python 3.11 or newer** from [python.org/downloads](https://www.python.org/downloads/).
-
-- **Windows:** During installation, check **"Add Python to PATH"** before clicking Install Now.
-- **macOS:** Use the python.org installer (not Homebrew) to ensure tkinter is included.
-
-### Step 2 — Download the app
-
-Download and unzip the `dbfw_tools` folder to anywhere on your computer (e.g. your Desktop).
-
-### Step 3 — Run the app
-
-- **Windows:** Double-click **`run_windows.bat`**
-- **macOS:** Double-click **`run_mac.command`**
-
-On first launch the script installs all required dependencies into a local folder (`.venv`) — this takes about a minute and only happens once. After that, the app opens immediately every time.
-
-> **macOS note:** If macOS blocks the script, right-click `run_mac.command` → **Open** → **Open** to allow it. You only need to do this once.
-
-> **macOS Redeemer note:** The Redeemer tab controls your keyboard and mouse to type codes into the game. macOS requires Accessibility permission for this. When prompted, go to **System Settings → Privacy & Security → Accessibility** and add the Terminal app (or DBFWTools if using the standalone build).
+Send card photos from your phone to Discord, scan them with one click, and watch the codes get entered automatically. No typing, no copy-pasting.
 
 ---
 
-## Overview
+## Table of Contents
 
-**DBFW Tools** is a two-tab application:
+- [What It Does](#what-it-does)
+- [For Users — Download & Setup](#for-users--download--setup)
+  - [Download the App](#1-download-the-app)
+  - [First Launch](#2-first-launch)
+  - [Get a Google Gemini API Key](#3-get-a-google-gemini-api-key)
+  - [Set Up Discord (Optional)](#4-set-up-discord-optional)
+  - [Using the Scanner](#5-using-the-scanner)
+  - [Using the Redeemer](#6-using-the-redeemer)
+  - [Output Folder & Logs](#7-output-folder--logs)
+  - [Troubleshooting](#troubleshooting)
+- [For Developers — Local Setup](#for-developers--local-setup)
+  - [Prerequisites](#prerequisites)
+  - [Clone & Install](#clone--install)
+  - [Run the App](#run-the-app)
+  - [Build a Distributable](#build-a-distributable)
+
+---
+
+## What It Does
+
+DBFW Tools is a two-tab desktop app:
 
 | Tab | What it does |
 |-----|-------------|
-| **Scanner** | Extracts 16-character codes from card photos using Google Gemini AI. Supports file upload, drag & drop, and fetching images directly from a private Discord channel. |
-| **Redeemer** | Takes the exported codes file and automatically types each code into the game, detects the result (Success / Already Used / Invalid), and logs everything. |
+| **Scanner** | Reads 16-character redemption codes from card photos using Google Gemini AI. Upload files, drag and drop, or pull images directly from a private Discord channel. |
+| **Redeemer** | Takes the exported codes file and automatically types each code into the game, reads the result screen, and logs everything. |
 
-The Scanner exports directly to the Redeemer — after scanning your cards, one click loads them into the Redeemer tab ready to go.
-
----
-
-## Requirements
-
-- Windows or macOS
-- Python 3.11+
-- A free [Google Gemini API key](https://aistudio.google.com) (for the Scanner)
-- Dragon Ball Fusion World installed and running (for the Redeemer)
-- *(Optional)* A Discord bot and private channel (for the Discord fetch feature)
+The two tabs work together: after scanning your cards, one click loads all codes into the Redeemer, ready to go.
 
 ---
 
-## Installation
+## For Users — Download & Setup
 
-```bash
-# Clone the repo
-git clone https://github.com/your-username/dragon-ball-fusion-world.git
-cd dragon-ball-fusion-world/dbfw_tools
+### 1. Download the App
 
-# Create and activate a virtual environment
-python -m venv .venv
+Go to the [**Releases page**](https://github.com/ashkash13/dragon-ball-fusion-world/releases) and download the file for your platform:
 
-# Windows
-.venv\Scripts\activate
+| Platform | File to download |
+|----------|-----------------|
+| Windows | `DBFWTools.exe` |
+| macOS | `DBFWTools-Mac.dmg` |
 
-# macOS
-source .venv/bin/activate
+No Python installation required — the app is fully self-contained.
 
-# Install dependencies
-pip install -r requirements.txt
+---
+
+### 2. First Launch
+
+**Windows**
+
+1. Double-click `DBFWTools.exe` to run it
+2. If Windows Defender shows a warning, click **More info → Run anyway** — this happens because the app is not from the Microsoft Store
+
+**macOS**
+
+1. Open `DBFWTools-Mac.dmg`
+2. Drag **DBFWTools** into your **Applications** folder
+
+   <!-- screenshot: macOS DMG drag-to-Applications window -->
+
+3. Open **Finder → Applications** and find DBFWTools
+4. **Right-click** the app → click **Open** → click **Open** again in the dialog
+
+   > This one-time step is required because the app is not from the Mac App Store. After doing it once, the app opens normally from then on.
+
+5. **Accessibility permission (Redeemer tab only):** The Redeemer controls your keyboard and mouse to type codes. macOS requires you to grant permission for this:
+   - Go to **System Settings → Privacy & Security → Accessibility**
+   - Click **+** and add **DBFWTools**
+
+   <!-- screenshot: macOS Accessibility settings with DBFWTools added -->
+
+---
+
+### 3. Get a Google Gemini API Key
+
+The Scanner uses Google Gemini AI to read codes from your card photos. A free API key gives you **250 image scans per day** (125 if AI Verification is enabled, since it uses a second pass per image).
+
+**Steps:**
+
+1. Go to [aistudio.google.com](https://aistudio.google.com) and sign in with any Google account
+2. Click **Get API Key** in the top navigation
+3. Click **Create API key** → choose any Google Cloud project (or create a new one)
+4. Copy the key that appears
+
+   <!-- screenshot: Google AI Studio — Get API Key page -->
+
+5. On first launch, the app will ask for your API key — paste it in and click **Save & Continue**
+
+   <!-- screenshot: App first-launch API key dialog -->
+
+**To change the key later:** Click **Change API Key** in the left sidebar of the Scanner tab.
+
+> Your API key is stored only on your own computer at `~/.dbfw_tools/config.json`. It is never sent anywhere except directly to Google.
+
+---
+
+### 4. Set Up Discord *(Optional)*
+
+Instead of transferring card photos to your computer by cable or email, you can send them from your phone to a private Discord channel and pull them directly into the app. This is the fastest workflow.
+
+A shared bot is already set up — you do not need to create your own Discord application.
+
+#### Step 1 — Invite the bot to your server
+
+Open the Scanner tab and click **Set up Discord →**, then click **Open Invite Link in Browser →**. This opens:
+
+```
+https://discord.com/oauth2/authorize?client_id=1485769708367249528&permissions=76800&scope=bot
 ```
 
----
+Select your Discord server and click **Authorize**.
 
-## Running the App
+<!-- screenshot: Discord bot authorization page -->
 
-```bash
-# From the dbfw_tools/ directory, with the venv active
-python main.py
-```
+#### Step 2 — Create a private channel for card photos
 
----
+In Discord, create a private text channel (or use an existing one). Give the bot access to it:
 
-## Setup
+1. Right-click the channel → **Edit Channel → Permissions**
+2. Click **+** next to **Members**, search for the bot, and select it
+3. Enable **View Channel**, **Read Message History**, and **Manage Messages**
+4. Click **Save Changes**
 
-### Gemini API Key
+<!-- screenshot: Discord channel permissions with bot added -->
 
-The Scanner uses Google Gemini to read codes from card photos. A free API key gives you 250 scans per day (125 if AI proofreading is enabled, since verification uses a second pass).
+#### Step 3 — Get your Channel ID
 
-1. Go to [aistudio.google.com](https://aistudio.google.com) and sign in with a Google account
-2. Click **Get API Key** → **Create API key**
-3. Copy the key
-4. On first launch, the Scanner tab will prompt you to paste it — click **Save & Continue**
+1. In Discord, go to **Settings → Advanced** and turn on **Developer Mode**
+2. Right-click your channel → **Copy Channel ID**
 
-To change the key later, click **Change API Key** in the sidebar.
+<!-- screenshot: Discord right-click Copy Channel ID -->
 
----
+#### Step 4 — Configure in the app
 
-### Discord Channel *(optional)*
+1. In the Scanner tab, click **Set up Discord →**
+2. Contact the developer to get the **bot token** and paste it in
+3. Paste your **Channel ID**
+4. Click **Validate & Save** — the app confirms the connection
 
-Instead of transferring card photos to your computer manually, you can send them to a private Discord channel from your phone and fetch them directly in the app.
+<!-- screenshot: App Discord setup dialog -->
 
-#### 1. Create a Discord bot
-
-1. Go to [discord.com/developers/applications](https://discord.com/developers/applications)
-2. Click **New Application** → give it a name → **Create**
-3. Go to **Bot** in the left sidebar
-4. Click **Reset Token** → confirm → copy the token (you'll need this later)
-5. Under **Privileged Gateway Intents**, enable **Message Content Intent** → **Save Changes**
-6. Go to **Installation** → set **Install Link** to **None** → **Save Changes**
-
-#### 2. Invite the bot to your server
-
-Open this URL in your browser, replacing `YOUR_APP_ID` with your **Application ID** (found on the General Information page):
-
-```
-https://discord.com/oauth2/authorize?client_id=YOUR_APP_ID&permissions=76800&scope=bot
-```
-
-Select your server → **Authorize**.
-
-The permissions value `76800` grants:
-- View Channel
-- Read Message History
-- Manage Messages *(used to delete messages after scanning)*
-
-#### 3. Grant access to your private channel
-
-1. In Discord, right-click the channel → **Edit Channel** → **Permissions**
-2. Click **+** next to Members → search for your bot → select it
-3. Set these to green (Allow): **View Channel**, **Read Message History**, **Manage Messages**
-4. **Save Changes**
-
-#### 4. Get the Channel ID
-
-1. In Discord, go to **Settings → Advanced** → enable **Developer Mode**
-2. Right-click the target channel → **Copy Channel ID**
-
-#### 5. Configure in the app
-
-1. In the Scanner tab, find the **Discord Channel** section
-2. Click **Set up Discord →**
-3. Paste your bot token and channel ID
-4. Click **Validate & Save** — the app confirms the bot can reach the channel
-
-Once configured, send card photos to the channel from your phone and click **Fetch from Discord** to scan them automatically. Each message is deleted after a successful scan so it won't be processed again.
+Once configured, send card photos to your Discord channel from your phone, then click **Fetch from Discord** in the app. Each image is deleted from the channel after a successful scan so it won't be processed twice.
 
 ---
 
-## Using the Scanner
+### 5. Using the Scanner
 
-1. **Add images** — click **Browse Images**, drag and drop files onto the window, or click **Fetch from Discord** to pull from your Discord channel
-2. **Scan** — click **Scan All Images**. Each image is scanned by Gemini, then verified with a second AI pass to catch misread characters
-3. **Review codes** — extracted codes appear in the **Collected Codes** sidebar. Use Ctrl+Click / Shift+Click to select multiple codes for removal
-4. **Export** — click **Export codes.txt**. The app automatically switches to the Redeemer tab with the file pre-loaded
+<!-- screenshot: Scanner tab with images loaded and codes in the sidebar -->
 
-**Tips:**
+1. **Add card photos** using any of these methods:
+   - Click **Browse Images** and select files
+   - Drag and drop image files directly onto the app window
+   - Click **Fetch from Discord** to pull new photos from your Discord channel
+
+2. **Click Scan All Images** — the app sends each photo to Gemini, extracts any codes it finds, and runs a second verification pass to catch misread characters
+
+3. **Review the codes** in the **Collected Codes** panel on the right. Use Ctrl+Click (Cmd+Click on Mac) or Shift+Click to select multiple codes for removal if needed
+
+4. **Click Export codes.txt** — the file is saved to your configured output folder and the app automatically switches to the Redeemer tab with the file pre-loaded
+
+**Tips for best results:**
+- Photograph the code area clearly — keep it well-lit and in focus
 - Multiple cards per photo are supported
-- Keep the cards centered in the frame — avoid unnecessary background (keyboards, etc.) as it adds visual noise
+- Avoid cluttered backgrounds; center the card in the frame
 - Supported formats: JPG, PNG, WEBP, BMP, TIFF
 
 ---
 
-## Using the Redeemer
+### 6. Using the Redeemer
 
-> The game must be open on the **Serial Code** entry screen before proceeding.
+> **Before starting:** Open Dragon Ball Fusion World and navigate to the **Serial Code** entry screen.
 
-1. The codes file is pre-filled if you came from the Scanner export. Otherwise click **Browse…** to load a `codes.txt` file manually
-2. Click **Proceed →** — the app locates the game window automatically
-3. A **5-second countdown** gives you time to switch to the game and click inside the first code input box
-4. The Redeemer types each code, clicks Confirm, reads the result dialog, and moves to the next code
-5. When finished, a summary shows Success / Already Used / Invalid counts, and a results file is saved next to the codes file
+<!-- screenshot: Redeemer tab with codes file loaded, showing Proceed button -->
 
-**Safety features:**
-- Move the mouse to the **top-left corner** of the screen at any time to immediately stop automation (PyAutoGUI failsafe)
-- Click **Stop** in the app to finish the current code and halt
-- Stops automatically after 3 consecutive INVALID results (indicates a bad codes file or expired codes)
+1. The codes file is automatically filled in if you came from the Scanner. Otherwise click **Browse…** to load a `codes.txt` file manually
+
+2. Click **Proceed →** — the app finds the game window automatically
+
+3. A **5-second countdown** gives you time to switch to the game and click inside the code input box
+
+4. The Redeemer types each code, clicks Confirm, reads the result, and moves to the next one automatically
+
+5. When finished, a summary shows Success / Already Used / Invalid counts, and a results file is saved to your output folder
+
+**To stop at any time:**
+- Move your mouse to the **top-left corner** of the screen — this immediately halts automation
+- Or click **Stop** in the app — it finishes the current code then stops
+
+**Automatic safety stops:**
+- Stops after 3 consecutive INVALID results (indicates expired or bad codes)
 - Warns when approaching the game's 10-error lockout limit
 
 ---
 
-## Building Distributable Installers
+### 7. Output Folder & Logs
 
-These scripts produce polished installers that require no Python installation from the end user.
+By default, output files are saved to:
 
-### Windows — Installer Wizard (`DBFWTools_Setup.exe`)
+| Platform | Default location |
+|----------|-----------------|
+| Windows | `Documents\DBFWTools\` |
+| macOS | `~/Documents/DBFWTools/` |
 
-The build script runs PyInstaller first, then automatically runs [Inno Setup](https://jrsoftware.org/isinfo.php) if it is installed to produce a full wizard installer.
+**To change the output folder:** Click **Change…** next to the output folder path in the Scanner tab sidebar. All logs, exported codes, and results files will move to the new location.
+
+<!-- screenshot: Scanner sidebar showing Output Folder section -->
+
+**Files saved in the output folder:**
+
+| File | Contents |
+|------|----------|
+| `codes.txt` | Codes exported from the Scanner |
+| `redeemer_results_YYYY-MM-DD.txt` | Results log from each Redeemer session |
+| `scanner.log` | Detailed Scanner activity (rotating, 1 MB max) |
+| `redeemer.log` | Detailed Redeemer activity (rotating, 1 MB max) |
+
+> The app's internal configuration (API key, Discord settings) is always stored at `~/.dbfw_tools/config.json` regardless of your output folder setting.
+
+---
+
+### Troubleshooting
+
+**"No new images found" when fetching from Discord**
+- Confirm the bot has **Read Message History** permission on the channel — check the channel's Permission Overrides specifically (not just the server-level role)
+- In the Discord Developer Portal, go to **Bot → Privileged Gateway Intents** and make sure **Message Content Intent** is enabled
+- Verify the Channel ID in the app matches the channel where you sent the photos
+
+**Redeemer can't find the game window**
+- Make sure the game is open and visible on screen — not minimized or behind other windows
+- Navigate to the **Serial Code** entry screen before clicking Proceed
+
+**Codes show as INVALID when they should be ALREADY_USED (or vice versa)**
+- This is a pixel detection threshold issue specific to your display settings
+- Open your redeemer log and look for lines containing `detect_result: full_ratio=` — share those values with the developer so the threshold can be adjusted
+
+**macOS: "DBFWTools can't be opened because it's from an unidentified developer"**
+- Right-click the app → **Open** → **Open** — this bypasses Gatekeeper for the app permanently
+
+**macOS: Redeemer isn't typing anything**
+- Grant Accessibility permission: **System Settings → Privacy & Security → Accessibility → add DBFWTools**
+
+---
+
+## For Developers — Local Setup
+
+### Prerequisites
+
+- Python 3.11 or newer ([python.org/downloads](https://www.python.org/downloads/))
+  - **Windows:** During install, check **"Add Python to PATH"**
+  - **macOS:** Use the python.org installer (not Homebrew) — it includes tkinter
+- Git
+
+### Clone & Install
+
+```bash
+git clone https://github.com/ashkash13/dragon-ball-fusion-world.git
+cd dragon-ball-fusion-world/dbfw_tools
+```
+
+**Windows:**
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**macOS:**
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+### Run the App
+
+```bash
+# From the dbfw_tools/ directory with the venv active
+python main.py
+```
+
+### Build a Distributable
+
+The build scripts produce self-contained binaries — no Python required on the end user's machine.
+
+**Windows → `dist\DBFWTools.exe`**
 
 ```bat
 cd dbfw_tools
@@ -196,69 +300,59 @@ cd dbfw_tools
 build_windows.bat
 ```
 
-The wizard guides users through:
-- Installation folder selection
-- Optional desktop shortcut
-- Optional Start Menu entry
-- Launch app on finish
-- Full uninstaller included
-
-**Outputs:**
-- `dist\DBFWTools.exe` — standalone binary (always produced)
-- `installer_output\DBFWTools_Setup.exe` — wizard installer (produced if Inno Setup is installed)
-
-To build the wizard installer, install **Inno Setup 6** from [jrsoftware.org/isinfo.php](https://jrsoftware.org/isinfo.php) — it's free. Once installed, `build_windows.bat` detects it automatically and produces both outputs.
-
----
-
-### macOS — DMG (`DBFWTools.dmg`)
+**macOS → `DBFWTools-Mac.dmg`**
 
 ```bash
 cd dbfw_tools
 source .venv/bin/activate
+brew install create-dmg   # one-time, skip if already installed
 bash build_mac.sh
 ```
 
-The script runs PyInstaller to produce `dist/DBFWTools.app`, then uses [create-dmg](https://github.com/create-dmg/create-dmg) to package it into a professional DMG with a drag-to-Applications layout — the standard macOS distribution format.
+**Automated releases via GitHub Actions**
 
-**Outputs:**
-- `dist/DBFWTools.app` — app bundle (always produced)
-- `DBFWTools.dmg` — distributable DMG (produced if create-dmg is installed)
+Pushing a version tag triggers the CI workflow, which builds both platforms in parallel and publishes a GitHub Release automatically:
 
-To build the DMG, install **create-dmg** via Homebrew:
 ```bash
-brew install create-dmg
+git tag v1.0.0
+git push origin v1.0.0
 ```
 
-Once installed, `build_mac.sh` detects it automatically.
+The release appears at `https://github.com/ashkash13/dragon-ball-fusion-world/releases` with both files attached.
 
-> On first launch, macOS requires Accessibility permission for the Redeemer tab (keyboard/mouse automation): **System Settings → Privacy & Security → Accessibility → add DBFWTools**.
-
----
-
-## Configuration Files
-
-The app stores its configuration in your home directory:
+### Project Structure
 
 ```
-~/.dbfw_tools/
-├── config.json      # API key and Discord settings
-├── scanner.log      # Scanner activity log (rotating, 1 MB max)
-└── redeemer.log     # Redeemer activity log (rotating, 1 MB max)
+dbfw_tools/
+├── main.py                  # Entry point — configures log dir, launches GUI
+├── requirements.txt         # Runtime + build dependencies
+├── build_windows.bat        # Windows build script (PyInstaller)
+├── build_mac.sh             # macOS build script (PyInstaller + create-dmg)
+└── src/
+    ├── gui.py               # Main window — Scanner tab + Redeemer tab
+    ├── logger.py            # Rotating file logger with runtime dir-switching
+    ├── scanner/
+    │   ├── config.py        # Persistent config (API key, Discord, output dir)
+    │   ├── gemini_client.py # Google Gemini image → codes extraction
+    │   └── discord_client.py# Discord channel image fetcher
+    └── redeemer/
+        ├── redeemer.py      # Automation loop — type, confirm, detect result
+        ├── window.py        # Game window detection
+        └── detector.py      # Screen pixel analysis for result detection
 ```
 
----
+### Configuration Reference
 
-## Troubleshooting
+The app's config is stored at `~/.dbfw_tools/config.json`:
 
-**Scanner says "No new images found" from Discord**
-- Confirm the bot has **Read Message History** permission on the channel (check the channel's Permission Overrides, not just the server role)
-- Ensure **Message Content Intent** is enabled in the Discord Developer Portal under Bot → Privileged Gateway Intents
-- Verify the Channel ID matches the channel where you sent the photos
+```json
+{
+  "api_key": "your-gemini-api-key",
+  "discord_bot_token": "...",
+  "discord_channel_id": "...",
+  "discord_last_message_id": "",
+  "output_dir": "/Users/you/Documents/DBFWTools"
+}
+```
 
-**Redeemer can't find the game window**
-- Make sure Dragon Ball Fusion World is open and visible (not minimized)
-- Navigate to the **Serial Code** entry screen before clicking Proceed
-
-**Codes are being marked INVALID when they should be ALREADY_USED (or vice versa)**
-- This is a screen detection threshold issue. Check the redeemer log for lines containing `detect_result: full_ratio=` and share them — the threshold can be adjusted in `src/redeemer/detector.py` (`ALREADY_USED_PIXEL_RATIO_THRESHOLD`)
+`output_dir` controls where `scanner.log`, `redeemer.log`, `codes.txt`, and results files are written. It can be changed at runtime via the Output Folder section in the Scanner tab sidebar — no restart required.
