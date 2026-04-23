@@ -3,12 +3,13 @@ Gemini API wrapper using the current google-genai SDK.
 
 Model choice — gemini-2.5-flash:
   - Superior character disambiguation vs flash-lite (critical for Z/2, O/0, B/8 etc.)
-  - Free tier: 10 RPM, 250 RPD
-  - App enforces 7s cooldown between camera scans (~8 RPM max)
+  - Free tier: 10 RPM, 20 RPD
+  - App enforces 7s cooldown between images (~8 RPM max, well under limit)
+  - One API call per image (no verification pass) to stay within daily quota
 
 Free tier limits (gemini-2.5-flash):
   - 10 requests per minute  → minimum 6s between requests (app uses 7s)
-  - 250 requests per day    → resets midnight Pacific time
+  - 20 requests per day     → resets midnight Pacific time
 """
 import io
 import re

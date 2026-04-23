@@ -316,6 +316,7 @@ class ScannerTab:
         self._scan_log.tag_config("error",   foreground="#ff6b6b")
         self._scan_log.tag_config("success", foreground="#6bcb77")
         self._scan_log.tag_config("info",    foreground="#cccccc")
+        self._scan_log.tag_config("warn",    foreground="#f0a040")
         self._scan_log.pack(fill="both", expand=True)
 
     def _build_sidebar(self) -> None:
@@ -453,6 +454,16 @@ class ScannerTab:
 
     def _set_countdown_label(self, remaining: int) -> None:
         self._countdown_var.set(f"Next image in {remaining}s…" if remaining > 0 else "")
+
+    def _retry_delay(self, seconds: int) -> None:
+        for remaining in range(seconds, 0, -1):
+            if self._closing.is_set():
+                return
+            self._safe_after(
+                lambda r=remaining: self._countdown_var.set(f"Retrying in {r}s…")
+            )
+            time.sleep(1)
+        self._safe_after(lambda: self._countdown_var.set(""))
 
     # ── Scan logic ────────────────────────────────────────────────────────────
 
@@ -778,11 +789,26 @@ class ScannerTab:
         )
         self._safe_after(self._finish_discord_fetch)
 
-    def _finish_file_scan(self, total_added: int, total_paths: int) -> None:
+    def _finish_file_scan(self, total_added: int, total_paths: int, *, quota_hit: bool = False) -> None:
         self._update_count()
-        self._append_log(
-            f"Done. {total_added} new code(s) added from {total_paths} image(s).", "success"
-        )
+        n_failed = sum(1 for s in self._file_statuses.values() if s == "error")
+        if quota_hit:
+            self._append_log(
+                f"Scan stopped — daily API quota exceeded. "
+                f"{total_added} code(s) added. Try again tomorrow.",
+                "error",
+            )
+        elif n_failed:
+            self._append_log(
+                f"Done. {total_added} new code(s) added. "
+                f"{n_failed} image(s) failed — click Scan All Images to retry them.",
+                "warn",
+            )
+        else:
+            self._append_log(
+                f"Done. {total_added} new code(s) added from {total_paths} image(s).",
+                "success",
+            )
         self._scan_btn.config(state="normal", text="Scan All Images")
         if hasattr(self, "_discord_fetch_btn"):
             self._discord_fetch_btn.config(state="normal")
@@ -794,7 +820,7 @@ class ScannerTab:
         self._update_count()
 
     def _scan_uploaded(self) -> None:
-        paths = list(self._file_paths)
+        paths = [p for p in self._file_paths if self._file_statuses.get(p) != "done"]
         if not paths:
             messagebox.showinfo("No Files", "Browse and select images first.")
             return
@@ -807,35 +833,80 @@ class ScannerTab:
 
     def _run_batch_scan(self, paths: list[str]) -> None:
         total_added = 0
+        _MAX_RETRIES = 3
+        _RETRY_DELAYS = [30, 60]  # seconds before attempt 2 and 3
+
         for i, path in enumerate(paths, start=1):
             label = Path(path).name
-            self._safe_after(lambda i=i, label=label: self._append_log(
-                f"Scanning {i}/{len(paths)}: {label}", "info"
-            ))
-            self._safe_after(lambda p=path: self._set_file_status(p, "scanning"))
-            try:
-                img = Image.open(path).convert("RGB")
-                codes = self._client.extract_codes(img)
-                if codes:
-                    self._safe_after(lambda c=len(codes), label=label: self._append_log(
-                        f"  {label}: {c} code(s) extracted, verifying…", "info"
+
+            for attempt in range(1, _MAX_RETRIES + 1):
+                if attempt == 1:
+                    self._safe_after(lambda i=i, n=len(paths), label=label: self._append_log(
+                        f"Scanning {i}/{n}: {label}", "info"
                     ))
-                    codes = self._client.verify_codes(img, codes)
-                added = self._add_codes(codes)
-                total_added += added
-                self._log.info("Image %s: found %s, added %d", label, codes, added)
-                self._safe_after(lambda p=path: self._set_file_status(p, "done"))
-                self._safe_after(lambda codes=codes, added=added, label=label: self._append_log(
-                    f"  {label}: {len(codes)} code(s) verified, {added} new.", "success"
-                ))
-            except Exception as exc:
-                self._log.error("Error scanning %s: %s", label, exc, exc_info=True)
-                self._safe_after(lambda p=path: self._set_file_status(p, "error"))
-                self._safe_after(lambda exc=exc, label=label: self._append_log(
-                    f"  Error on {label}: {exc}", "error"
-                ))
-                time.sleep(1)
-                continue
+                else:
+                    delay = _RETRY_DELAYS[attempt - 2]
+                    self._safe_after(lambda d=delay, a=attempt, m=_MAX_RETRIES, label=label:
+                        self._append_log(
+                            f"  Server overloaded — waiting {d}s before retry "
+                            f"({a}/{m}): {label}", "warn"
+                        )
+                    )
+                    self._retry_delay(delay)
+
+                self._safe_after(lambda p=path: self._set_file_status(p, "scanning"))
+
+                try:
+                    img = Image.open(path).convert("RGB")
+                    codes = self._client.extract_codes(img)
+                    added = self._add_codes(codes)
+                    total_added += added
+                    self._log.info("Image %s: found %s, added %d", label, codes, added)
+                    self._safe_after(lambda p=path: self._set_file_status(p, "done"))
+                    self._safe_after(lambda codes=codes, added=added, label=label:
+                        self._append_log(
+                            f"  {label}: {len(codes)} code(s) found, {added} new.", "success"
+                        )
+                    )
+                    break  # success — move to next image
+
+                except Exception as exc:
+                    error_str = str(exc)
+                    is_quota = "429" in error_str or "RESOURCE_EXHAUSTED" in error_str
+                    is_overload = "503" in error_str or "UNAVAILABLE" in error_str
+
+                    if is_quota:
+                        self._log.error("Daily quota exceeded: %s", exc)
+                        self._safe_after(lambda p=path: self._set_file_status(p, "error"))
+                        self._safe_after(lambda: self._append_log(
+                            "  Daily API quota exceeded — scan stopped. Try again tomorrow.",
+                            "error",
+                        ))
+                        self._safe_after(lambda: self._finish_file_scan(
+                            total_added, len(paths), quota_hit=True
+                        ))
+                        return
+
+                    if is_overload and attempt < _MAX_RETRIES:
+                        self._log.warning(
+                            "503 on %s (attempt %d/%d), will retry", label, attempt, _MAX_RETRIES
+                        )
+                        continue  # retry after delay shown at top of next iteration
+
+                    # Permanent failure: non-retryable error or retries exhausted
+                    self._log.error("Error scanning %s: %s", label, exc, exc_info=True)
+                    self._safe_after(lambda p=path: self._set_file_status(p, "error"))
+                    if is_overload:
+                        self._safe_after(lambda label=label, m=_MAX_RETRIES: self._append_log(
+                            f"  {label}: server still overloaded after {m} attempts — skipped.",
+                            "error",
+                        ))
+                    else:
+                        self._safe_after(lambda exc=exc, label=label: self._append_log(
+                            f"  Error on {label}: {exc}", "error"
+                        ))
+                    time.sleep(1)
+                    break
 
             if i < len(paths):
                 self._countdown_delay(int(BATCH_DELAY))
