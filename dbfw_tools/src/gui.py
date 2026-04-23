@@ -19,6 +19,7 @@ import subprocess
 import threading
 import time
 import tkinter as tk
+import webbrowser
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
@@ -48,6 +49,13 @@ except ImportError:
     _DND_AVAILABLE = False
 
 # ── Constants ────────────────────────────────────────────────────────────────
+
+# OAuth2 invite link for the shared DBFW Discord bot.
+# Users click this to add the bot to their server — no bot creation required.
+DISCORD_BOT_INVITE_URL = (
+    "https://discord.com/oauth2/authorize"
+    "?client_id=1485769708367249528&permissions=76800&scope=bot"
+)
 
 WINDOW_TITLE      = "Dragon Ball Fusion World Tools"
 WINDOW_W          = 1020
@@ -486,7 +494,7 @@ class ScannerTab:
     def _show_discord_setup_dialog(self) -> None:
         dlg = tk.Toplevel(self._frame)
         dlg.title("Discord Channel Setup")
-        dlg.geometry("520x390")
+        dlg.geometry("520x500")
         dlg.resizable(False, False)
         dlg.transient(self._frame)
         dlg.grab_set()
@@ -495,24 +503,37 @@ class ScannerTab:
         outer.pack(fill="both", expand=True)
 
         ttk.Label(outer, text="Discord Channel Setup", font=("Helvetica", 13, "bold")).pack(
-            pady=(0, 4)
+            pady=(0, 14)
         )
+
+        # ── Step 1: Invite the bot ─────────────────────────────────────────────
+        ttk.Label(outer, text="Step 1 — Add the bot to your Discord server",
+                  font=("Helvetica", 10, "bold")).pack(anchor="w")
         ttk.Label(
             outer,
-            text=(
-                "Create a Discord bot, invite it to your server with 'Read Message History'\n"
-                "and 'Manage Messages' permissions, then enter the credentials below."
-            ),
-            justify="center", foreground="#555555", font=("Helvetica", 9),
-        ).pack(pady=(0, 12))
+            text="Click the button below to open Discord in your browser. Select your server and click Authorise.",
+            font=("Helvetica", 8), foreground="#555555", wraplength=460,
+        ).pack(anchor="w", pady=(2, 6))
+        ttk.Button(
+            outer, text="Open Invite Link in Browser →",
+            command=lambda: webbrowser.open_new(DISCORD_BOT_INVITE_URL),
+        ).pack(anchor="w", pady=(0, 12))
 
+        ttk.Separator(outer, orient="horizontal").pack(fill="x", pady=(0, 12))
+
+        # ── Step 2: Bot token ──────────────────────────────────────────────────
         cfg = load_discord_config()
 
-        # Bot token
-        ttk.Label(outer, text="Bot Token:").pack(anchor="w")
+        ttk.Label(outer, text="Step 2 — Enter the bot token",
+                  font=("Helvetica", 10, "bold")).pack(anchor="w")
+        ttk.Label(
+            outer,
+            text="The bot token is provided by the developer. Treat it like a password — do not share it with anyone else.",
+            font=("Helvetica", 8), foreground="#555555", wraplength=460,
+        ).pack(anchor="w", pady=(2, 4))
         token_var = tk.StringVar(value=cfg["bot_token"])
         token_entry = ttk.Entry(outer, textvariable=token_var, width=56, show="*")
-        token_entry.pack(fill="x", pady=(2, 2))
+        token_entry.pack(fill="x", pady=(0, 2))
         show_var = tk.BooleanVar(value=False)
 
         def toggle_token_show():
@@ -520,19 +541,22 @@ class ScannerTab:
 
         ttk.Checkbutton(
             outer, text="Show token", variable=show_var, command=toggle_token_show,
-        ).pack(anchor="w", pady=(0, 10))
+        ).pack(anchor="w", pady=(0, 12))
 
-        # Channel ID
-        ttk.Label(outer, text="Channel ID:").pack(anchor="w")
+        ttk.Separator(outer, orient="horizontal").pack(fill="x", pady=(0, 12))
+
+        # ── Step 3: Channel ID ─────────────────────────────────────────────────
+        ttk.Label(outer, text="Step 3 — Enter your channel ID",
+                  font=("Helvetica", 10, "bold")).pack(anchor="w")
         ttk.Label(
             outer,
-            text="Enable Developer Mode in Discord (Settings → Advanced), then right-click your channel → Copy Channel ID",
-            font=("Helvetica", 8), foreground="#888888", wraplength=460,
-        ).pack(anchor="w")
+            text="In Discord: Settings → Advanced → enable Developer Mode. Then right-click your channel → Copy Channel ID.",
+            font=("Helvetica", 8), foreground="#555555", wraplength=460,
+        ).pack(anchor="w", pady=(2, 4))
         channel_var = tk.StringVar(value=cfg["channel_id"])
-        ttk.Entry(outer, textvariable=channel_var, width=24).pack(anchor="w", pady=(2, 12))
+        ttk.Entry(outer, textvariable=channel_var, width=24).pack(anchor="w", pady=(0, 14))
 
-        # Status
+        # ── Status + buttons ───────────────────────────────────────────────────
         status_var = tk.StringVar()
         status_lbl = ttk.Label(outer, textvariable=status_var, wraplength=460, justify="left")
         status_lbl.pack(fill="x", pady=(0, 8))
@@ -553,10 +577,9 @@ class ScannerTab:
                 status_var.set(f"Error: {error}")
                 status_lbl.config(foreground="#cc0000")
                 return
-            # Preserve last_message_id when saving (don't reset progress)
             save_discord_config(token, channel, cfg["last_message_id"])
             self._log.info("Discord config saved — channel %s", channel)
-            status_var.set("Connected! Settings saved.")
+            status_var.set("✓ Connected! Settings saved.")
             status_lbl.config(foreground="#007700")
             self._refresh_discord_section()
             dlg.after(1200, dlg.destroy)
