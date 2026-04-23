@@ -33,4 +33,15 @@ Thumbs.db
 .dbfw_scanner/
 
 # ── Tool outputs (generated files, not source) ────────────────────────────────
-code_scanner/codes.txt
+
+# codes files (scanner output + redeemer results — generated, not source)
+codes*.txt
+
+# Card images dropped into the repo for scanning
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.bmp
+*.tiff
+*.tif
