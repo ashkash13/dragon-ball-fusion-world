@@ -19,6 +19,33 @@ from PIL import Image
 
 _MODEL = "gemini-2.5-flash"
 
+_VERIFY_PROMPT_TEMPLATE = """You previously extracted these redemption codes from the card image:
+
+{codes}
+
+Your job now is to PROOFREAD each code by looking at the physical card image again, character by character.
+
+Apply the same disambiguation rules:
+  Z vs 2  — Z has TWO horizontal bars joined by a diagonal. 2 has ONE bar at the bottom with a curved top.
+  Z vs L  — Z has a bar at the top AND bottom. L has NO top bar.
+  B vs 8  — B has a straight left edge. 8 is symmetrical.
+  S vs 5  — 5 has a FLAT horizontal bar at the very top. S curves continuously with no flat top.
+  J vs 2  — J has a hook curving downward at the bottom. 2 has a curved top and flat base.
+  C vs E  — E has THREE horizontal bars (top, middle, bottom). C is an open curve with NO bars.
+  4 vs E  — 4 has a diagonal stroke and descending vertical. E has only horizontal bars, no diagonal.
+  I vs 1  — 1 is a plain vertical stroke. I may have serifs.
+  Q vs 0  — Q has a small tail inside/below the circle.
+
+For each code:
+  1. Locate it on the card image.
+  2. Re-read every character carefully.
+  3. Correct any character you are now less confident about.
+  4. If a code cannot be found in the image at all, omit it.
+
+Return ONLY the final verified codes, one per line, in the format: XXXX XXXX XXXX XXXX
+Do not explain your reasoning. Do not include anything else.
+"""
+
 _PROMPT = """You are a precise code-extraction assistant reading redemption codes from Dragon Ball Fusion World trading cards.
 
 Each card has exactly one 16-character code printed in large text near the bottom, formatted as:
@@ -43,11 +70,27 @@ This card font causes frequent misreads. For EVERY character, actively check the
              then drops vertically on the left before curving right at the bottom.
              S has NO flat stroke at the top — it curves continuously like a wave from top to bottom.
              If the top of the character is flat/horizontal, it is 5 not S.
-             In blurry images, default to S only if the top is clearly curved.
+             This is one of the most common misreads in this font — when uncertain, examine the
+             top edge: ANY flat or angular top means it is 5. Only call it S if the top is
+             unambiguously curved with no flat segment.
 
   O vs 0  — These are both acceptable in codes. Read whichever is printed.
 
   I vs 1  — 1 is a simple vertical stroke. I may have serifs/crossbars.
+
+  J vs 2  — J hangs below the baseline with a hook or curve at the bottom; it may have a
+             horizontal bar at the top. 2 has a curved top stroke and a flat horizontal
+             base — it does NOT hang below the line.
+             If the character curves downward at the bottom like a hook, it is J not 2.
+
+  C vs E  — E has THREE horizontal bars: one at the top, one in the middle, one at the bottom.
+             C is an open curve with NO horizontal bars — it looks like a parenthesis ( rotated.
+             If you can see a middle horizontal stroke, it is E not C.
+
+  4 vs E  — 4 has a diagonal or angled top-left stroke meeting a horizontal crossbar, plus a
+             vertical stroke on the right that extends below the crossbar.
+             E has only horizontal bars — no diagonal strokes and no descending vertical.
+             If the character has an angled or diagonal stroke, it is 4 not E.
 
   Q vs 0  — Q has a small tail or mark inside/below the circle.
 
@@ -87,6 +130,33 @@ class GeminiClient:
             contents=[_pil_to_part(image), _PROMPT],
         )
         return _parse_response(response.text)
+
+    def verify_codes(self, image: Image.Image, codes: list[str]) -> list[str]:
+        """
+        Proofread a list of extracted codes against the original image.
+
+        Sends the image + the extracted codes back to Gemini and asks it to
+        re-examine each code character by character, correcting any mistakes.
+        Returns the verified (and possibly corrected) code list.
+
+        Counts as one additional API request per image — keep rate limits in mind.
+        Returns the original codes unchanged if the verification call fails.
+        """
+        if not codes:
+            return codes
+        codes_text = "\n".join(codes)
+        prompt = _VERIFY_PROMPT_TEMPLATE.format(codes=codes_text)
+        try:
+            response = self._client.models.generate_content(
+                model=_MODEL,
+                contents=[_pil_to_part(image), prompt],
+            )
+            verified = _parse_response(response.text)
+            return verified if verified else codes
+        except Exception:
+            # If verification fails for any reason, return the original codes
+            # so the scan result is not silently dropped.
+            return codes
 
     def validate_key(self) -> str | None:
         """

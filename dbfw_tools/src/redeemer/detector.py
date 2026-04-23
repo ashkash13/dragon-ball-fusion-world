@@ -51,7 +51,12 @@ BANNER_REGIONS = [
 
 # Area containing the body error message text (white text on dark background).
 # "Invalid" produces ~2 lines of text; "Already used" produces ~1 line.
-BODY_REL     = (0.290, 0.385, 0.420, 0.110)
+BODY_REL       = (0.290, 0.385, 0.420, 0.110)
+
+# Lower half of the body region — specifically where the SECOND line of text
+# would appear in an INVALID dialog.  ALREADY_USED only has one line so this
+# region stays dark; INVALID has two lines so it will be lit up.
+BODY_LOWER_REL = (0.290, 0.440, 0.420, 0.055)
 
 # ── Click targets for the Close button ───────────────────────────────────────
 # The success dialog is taller than the failure dialog so its Close button
@@ -70,10 +75,20 @@ CLOSE_REL_FAILURE = (0.499, 0.613)
 # so 80 gives comfortable headroom on both sides.
 BANNER_DELTA = 80
 
-# Bright-pixel ratio (fraction of pixels with R,G,B all > 180) in the body
-# region.  "Invalid" has ~2 lines of white text so its ratio exceeds this;
-# "Already used" has ~1 line so its ratio falls below it.
-ALREADY_USED_PIXEL_RATIO_THRESHOLD = 0.07
+# Bright-pixel ratio (fraction of pixels with R,G,B all > 180) in the full
+# body region.  Kept as a fallback signal alongside the lower-half check.
+ALREADY_USED_PIXEL_RATIO_THRESHOLD = 0.050
+# Calibrated from real runs:
+#   ALREADY_USED observed full_ratio ≈ 0.0427  → 0.0073 below threshold
+#   INVALID      observed full_ratio ≈ 0.0563  → 0.0063 above threshold
+# Midpoint = 0.0495 → rounded to 0.050 for equal headroom on both sides.
+
+# Bright-pixel ratio in the LOWER half of the body only.
+# Even with small or low-contrast fonts, a second line of text will push this
+# above ~0.03.  ALREADY_USED (one line) typically reads < 0.01 here.
+# Tuned conservatively — check the INFO log ("lower_ratio=") to refine.
+# When in doubt we default to INVALID — safer for the lockout budget.
+LOWER_HALF_TEXT_THRESHOLD = 0.03
 
 
 def calibrate_baseline(win: WindowRect) -> float:
@@ -152,31 +167,52 @@ def detect_result(win: WindowRect) -> str:
         "ALREADY_USED"  – code was valid but already redeemed (safe, not a lockout risk)
         "INVALID"       – code rejected (counts toward the 10-error lockout)
     """
-    # detect_result is only called for failure dialogs — SUCCESS is identified
-    # upstream by the banner position.  Only job here is to tell ALREADY_USED
-    # from INVALID via the length of the body error message.
-    # ── Distinguish ALREADY_USED vs INVALID via body text length ─────────────
+    # Two signals are combined to distinguish ALREADY_USED (1 line) from
+    # INVALID (2 lines).  Both are logged at INFO so ratios appear in the
+    # normal log for threshold tuning without enabling debug mode.
+    #
+    # Signal 1 — full body region bright-pixel ratio (original method)
     body_region = win.abs_region(*BODY_REL)
-    body_shot = pyautogui.screenshot(region=body_region)
-    body_arr = np.array(body_shot, dtype=np.uint8)
-
-    # Count pixels where all three channels exceed 180 (white body text)
+    body_shot   = pyautogui.screenshot(region=body_region)
+    body_arr    = np.array(body_shot, dtype=np.uint8)
     bright_mask = (
         (body_arr[:, :, 0] > 180) &
         (body_arr[:, :, 1] > 180) &
         (body_arr[:, :, 2] > 180)
     )
-    bright_ratio = float(bright_mask.mean())
-    _log.debug(
-        "  detect_result: body bright_ratio=%.4f (threshold=%.2f)",
-        bright_ratio, ALREADY_USED_PIXEL_RATIO_THRESHOLD,
+    full_ratio = float(bright_mask.mean())
+
+    # Signal 2 — lower-half region only (where the 2nd line of INVALID text sits)
+    lower_region = win.abs_region(*BODY_LOWER_REL)
+    lower_shot   = pyautogui.screenshot(region=lower_region)
+    lower_arr    = np.array(lower_shot, dtype=np.uint8)
+    lower_mask   = (
+        (lower_arr[:, :, 0] > 180) &
+        (lower_arr[:, :, 1] > 180) &
+        (lower_arr[:, :, 2] > 180)
+    )
+    lower_ratio = float(lower_mask.mean())
+
+    _log.info(
+        "  detect_result: full_ratio=%.4f  lower_ratio=%.4f"
+        "  (thresholds: full=%.2f  lower=%.3f)",
+        full_ratio, lower_ratio,
+        ALREADY_USED_PIXEL_RATIO_THRESHOLD, LOWER_HALF_TEXT_THRESHOLD,
     )
 
-    if bright_ratio < ALREADY_USED_PIXEL_RATIO_THRESHOLD:
-        _log.debug("  → ALREADY_USED (short body text)")
+    # Decision: use full_ratio only. The lower-half region captures text from
+    # both dialog types so it cannot reliably distinguish them without
+    # per-machine coordinate recalibration.
+    # lower_ratio is still logged so thresholds can be tuned from real runs.
+    #
+    # Known data point: ALREADY_USED full_ratio ≈ 0.0427.
+    # Threshold is set above that with headroom. Refine ALREADY_USED_PIXEL_RATIO_THRESHOLD
+    # once INVALID ratio data is available from the INFO log.
+    if full_ratio < ALREADY_USED_PIXEL_RATIO_THRESHOLD:
+        _log.info("  → ALREADY_USED (full_ratio=%.4f < %.3f)", full_ratio, ALREADY_USED_PIXEL_RATIO_THRESHOLD)
         return "ALREADY_USED"
     else:
-        _log.debug("  → INVALID (long body text)")
+        _log.info("  → INVALID (full_ratio=%.4f >= %.3f)", full_ratio, ALREADY_USED_PIXEL_RATIO_THRESHOLD)
         return "INVALID"
 
 

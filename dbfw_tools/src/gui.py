@@ -12,6 +12,7 @@ switches to the Redeemer tab and pre-fills the file path so the user
 only has to click Proceed.
 """
 import datetime
+import io
 import os
 import platform
 import subprocess
@@ -27,7 +28,11 @@ from src.logger import (
     get_scanner_logger, get_redeemer_logger,
     scanner_log_path, redeemer_log_path,
 )
-from src.scanner.config import load_api_key, save_api_key
+from src.scanner.config import (
+    load_api_key, save_api_key,
+    load_discord_config, save_discord_config, save_discord_last_message_id,
+)
+from src.scanner.discord_client import DiscordClient, DiscordError
 from src.scanner.gemini_client import GeminiClient
 from src.redeemer.redeemer import Redeemer, validate_codes_file
 from src.redeemer.window import find_game_window, WindowRect
@@ -220,7 +225,9 @@ class ScannerTab:
             justify="left",
         ).pack(anchor="w", pady=(2, 6))
 
-        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(0, 8))
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(0, 6))
+
+        self._build_discord_section(parent)
 
         # Browse / Clear buttons
         btn_row = ttk.Frame(parent)
@@ -432,12 +439,329 @@ class ScannerTab:
         )
         self._append_log("File list cleared.", "info")
 
+    # ── Discord section ───────────────────────────────────────────────────────
+
+    def _build_discord_section(self, parent: ttk.Frame) -> None:
+        self._discord_frame = ttk.LabelFrame(parent, text="Discord Channel", padding=(8, 4))
+        self._discord_frame.pack(fill="x", pady=(0, 6))
+        self._refresh_discord_section()
+
+    def _refresh_discord_section(self) -> None:
+        if not hasattr(self, "_discord_frame"):
+            return
+        for w in self._discord_frame.winfo_children():
+            w.destroy()
+        self.__dict__.pop("_discord_fetch_btn", None)
+
+        cfg = load_discord_config()
+        configured = bool(cfg["bot_token"] and cfg["channel_id"])
+
+        if not configured:
+            row = ttk.Frame(self._discord_frame)
+            row.pack(fill="x")
+            ttk.Label(row, text="Not configured.", foreground="#888888").pack(side="left")
+            ttk.Button(
+                row, text="Set up Discord →", command=self._show_discord_setup_dialog,
+            ).pack(side="left", padx=(8, 0))
+        else:
+            row1 = ttk.Frame(self._discord_frame)
+            row1.pack(fill="x")
+            ttk.Label(
+                row1, text=f"Channel ID: {cfg['channel_id']}",
+                foreground="#555555", font=("Helvetica", 9),
+            ).pack(side="left")
+            self._discord_fetch_btn = ttk.Button(
+                row1, text="Fetch from Discord", command=self._fetch_from_discord,
+            )
+            self._discord_fetch_btn.pack(side="left", padx=(10, 4))
+            ttk.Button(
+                row1, text="Settings", command=self._show_discord_setup_dialog,
+            ).pack(side="left", padx=4)
+            ttk.Label(
+                self._discord_frame,
+                text=f"Last fetch: {cfg['last_fetch_display']}",
+                foreground="#888888", font=("Helvetica", 8),
+            ).pack(anchor="w", pady=(2, 0))
+
+    def _show_discord_setup_dialog(self) -> None:
+        dlg = tk.Toplevel(self._frame)
+        dlg.title("Discord Channel Setup")
+        dlg.geometry("520x390")
+        dlg.resizable(False, False)
+        dlg.transient(self._frame)
+        dlg.grab_set()
+
+        outer = ttk.Frame(dlg, padding=20)
+        outer.pack(fill="both", expand=True)
+
+        ttk.Label(outer, text="Discord Channel Setup", font=("Helvetica", 13, "bold")).pack(
+            pady=(0, 4)
+        )
+        ttk.Label(
+            outer,
+            text=(
+                "Create a Discord bot, invite it to your server with 'Read Message History'\n"
+                "and 'Manage Messages' permissions, then enter the credentials below."
+            ),
+            justify="center", foreground="#555555", font=("Helvetica", 9),
+        ).pack(pady=(0, 12))
+
+        cfg = load_discord_config()
+
+        # Bot token
+        ttk.Label(outer, text="Bot Token:").pack(anchor="w")
+        token_var = tk.StringVar(value=cfg["bot_token"])
+        token_entry = ttk.Entry(outer, textvariable=token_var, width=56, show="*")
+        token_entry.pack(fill="x", pady=(2, 2))
+        show_var = tk.BooleanVar(value=False)
+
+        def toggle_token_show():
+            token_entry.config(show="" if show_var.get() else "*")
+
+        ttk.Checkbutton(
+            outer, text="Show token", variable=show_var, command=toggle_token_show,
+        ).pack(anchor="w", pady=(0, 10))
+
+        # Channel ID
+        ttk.Label(outer, text="Channel ID:").pack(anchor="w")
+        ttk.Label(
+            outer,
+            text="Enable Developer Mode in Discord (Settings → Advanced), then right-click your channel → Copy Channel ID",
+            font=("Helvetica", 8), foreground="#888888", wraplength=460,
+        ).pack(anchor="w")
+        channel_var = tk.StringVar(value=cfg["channel_id"])
+        ttk.Entry(outer, textvariable=channel_var, width=24).pack(anchor="w", pady=(2, 12))
+
+        # Status
+        status_var = tk.StringVar()
+        status_lbl = ttk.Label(outer, textvariable=status_var, wraplength=460, justify="left")
+        status_lbl.pack(fill="x", pady=(0, 8))
+
+        def validate_and_save():
+            token = token_var.get().strip()
+            channel = channel_var.get().strip()
+            if not token or not channel:
+                status_var.set("Both bot token and channel ID are required.")
+                status_lbl.config(foreground="#cc0000")
+                return
+            status_var.set("Validating…")
+            status_lbl.config(foreground="#555555")
+            dlg.update_idletasks()
+            client = DiscordClient(token, channel)
+            error = client.validate()
+            if error:
+                status_var.set(f"Error: {error}")
+                status_lbl.config(foreground="#cc0000")
+                return
+            # Preserve last_message_id when saving (don't reset progress)
+            save_discord_config(token, channel, cfg["last_message_id"])
+            self._log.info("Discord config saved — channel %s", channel)
+            status_var.set("Connected! Settings saved.")
+            status_lbl.config(foreground="#007700")
+            self._refresh_discord_section()
+            dlg.after(1200, dlg.destroy)
+
+        btn_row = ttk.Frame(outer)
+        btn_row.pack()
+        ttk.Button(btn_row, text="Validate & Save", command=validate_and_save).pack(
+            side="left", padx=4
+        )
+        ttk.Button(btn_row, text="Cancel", command=dlg.destroy).pack(side="left", padx=4)
+        token_entry.focus_set()
+
+    def _fetch_from_discord(self) -> None:
+        if not self._client:
+            messagebox.showinfo("Not Ready", "Set up your Gemini API key first.")
+            return
+        cfg = load_discord_config()
+        if not cfg["bot_token"] or not cfg["channel_id"]:
+            self._show_discord_setup_dialog()
+            return
+        self._scan_btn.config(state="disabled")
+        if hasattr(self, "_discord_fetch_btn"):
+            self._discord_fetch_btn.config(state="disabled", text="Fetching…")
+        self._append_log("Fetching images from Discord…", "info")
+        self._log.info("Discord fetch started (after=%s)", cfg["last_message_id"] or "none")
+        threading.Thread(target=self._run_discord_fetch, args=(cfg,), daemon=True).start()
+
+    def _run_discord_fetch(self, cfg: dict) -> None:
+        discord = DiscordClient(cfg["bot_token"], cfg["channel_id"])
+        after_id = cfg["last_message_id"] or None
+
+        try:
+            messages = discord.fetch_image_messages(after_id=after_id)
+        except DiscordError as exc:
+            self._log.error("Discord fetch error: %s", exc)
+            self._frame.after(0, lambda e=exc: self._append_log(f"Discord error: {e}", "error"))
+            self._frame.after(0, self._finish_discord_fetch)
+            return
+
+        if not messages:
+            self._log.info("Discord fetch: no new images found")
+            # Diagnostic: raw fetch to see exactly what the API returns
+            try:
+                import requests as _req
+                raw_resp = _req.get(
+                    f"{discord.BASE}/channels/{cfg['channel_id']}/messages",
+                    headers={"Authorization": f"Bot {cfg['bot_token']}"},
+                    params={"limit": 10},
+                    timeout=10,
+                )
+                status = raw_resp.status_code
+                try:
+                    body = raw_resp.json()
+                except Exception:
+                    body = raw_resp.text[:300]
+
+                self._log.debug("Discord raw messages response %d: %s", status, body)
+
+                if status == 403:
+                    msg = f"API returned 403 Forbidden — bot is missing Read Message History permission on this channel."
+                elif status == 401:
+                    msg = "API returned 401 — bot token is invalid."
+                elif status == 404:
+                    msg = "API returned 404 — channel not found. Double-check the Channel ID."
+                elif not raw_resp.ok:
+                    msg = f"API returned {status}: {str(body)[:200]}"
+                elif isinstance(body, list) and len(body) == 0:
+                    msg = "API returned 0 messages. The channel is empty or the bot cannot see any messages."
+                elif isinstance(body, list):
+                    all_filenames = [
+                        a.get("filename", "?")
+                        for m in body for a in m.get("attachments", [])
+                    ]
+                    if all_filenames:
+                        msg = (
+                            f"API returned {len(body)} message(s) but attachments were filtered out. "
+                            f"Found filenames: {all_filenames}. Only .jpg/.jpeg/.png/.webp are supported."
+                        )
+                    else:
+                        msg = (
+                            f"API returned {len(body)} message(s) but none had image attachments. "
+                            "Make sure you sent the photo as a file/image, not a link or embed."
+                        )
+                else:
+                    msg = f"Unexpected API response: {str(body)[:200]}"
+
+                self._frame.after(0, lambda m=msg: self._append_log(f"Diagnostic: {m}", "error"))
+            except Exception as exc:
+                self._frame.after(
+                    0, lambda e=exc: self._append_log(f"Diagnostic failed: {e}", "error")
+                )
+            self._frame.after(0, self._finish_discord_fetch)
+            return
+
+        self._log.info("Discord fetch: %d message(s) with images", len(messages))
+        self._frame.after(
+            0, lambda n=len(messages): self._append_log(
+                f"Found {n} message(s) with images.", "info"
+            )
+        )
+
+        total_codes_added = 0
+        processed_messages = 0
+
+        for i, msg in enumerate(messages):
+            msg_id = msg["id"]
+            attachments = msg["attachments"]
+            msg_success = True
+
+            for att in attachments:
+                url = att["url"]
+                filename = att["filename"]
+                self._frame.after(
+                    0, lambda fn=filename: self._append_log(
+                        f"  Scanning discord/{fn}…", "info"
+                    )
+                )
+                try:
+                    raw = discord.download_attachment(url)
+                    img = Image.open(io.BytesIO(raw)).convert("RGB")
+                    codes = self._client.extract_codes(img)
+                    if codes:
+                        self._frame.after(
+                            0, lambda fn=filename, c=len(codes): self._append_log(
+                                f"  discord/{fn}: {c} code(s) extracted, verifying…", "info"
+                            )
+                        )
+                        codes = self._client.verify_codes(img, codes)
+                    added = self._add_codes(codes)
+                    total_codes_added += added
+                    self._log.info("discord/%s: %d code(s), %d new", filename, len(codes), added)
+                    self._frame.after(
+                        0, lambda fn=filename, c=len(codes), a=added: self._append_log(
+                            f"  discord/{fn}: {c} code(s) verified, {a} new.", "success"
+                        )
+                    )
+                except Exception as exc:
+                    self._log.error("discord/%s: %s", filename, exc, exc_info=True)
+                    self._frame.after(
+                        0, lambda fn=filename, e=exc: self._append_log(
+                            f"  Error on discord/{fn}: {e}", "error"
+                        )
+                    )
+                    msg_success = False
+
+            if msg_success:
+                try:
+                    discord.delete_message(msg_id)
+                    fetch_display = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                    save_discord_last_message_id(msg_id, fetch_display)
+                    processed_messages += 1
+                    self._log.info("Discord message %s deleted", msg_id)
+                    self._frame.after(0, self._refresh_discord_section)
+                except DiscordError as exc:
+                    self._log.error("Could not delete message %s: %s", msg_id, exc)
+                    self._frame.after(
+                        0, lambda e=exc: self._append_log(
+                            f"  Warning: could not delete Discord message ({e})", "error"
+                        )
+                    )
+            else:
+                self._frame.after(
+                    0, lambda: self._append_log(
+                        "  Message preserved (scan error) — retry by fetching again.", "error"
+                    )
+                )
+
+            if i < len(messages) - 1:
+                self._countdown_delay(int(BATCH_DELAY))
+
+        self._log.info(
+            "Discord fetch complete: %d/%d messages, %d codes added",
+            processed_messages, len(messages), total_codes_added,
+        )
+        self._frame.after(
+            0, lambda n=processed_messages, t=len(messages), c=total_codes_added: self._append_log(
+                f"Discord fetch done: {n}/{t} message(s) processed, {c} new code(s) added.",
+                "success" if n > 0 else "info",
+            )
+        )
+        self._frame.after(0, self._finish_discord_fetch)
+
+    def _finish_file_scan(self, total_added: int, total_paths: int) -> None:
+        self._update_count()
+        self._append_log(
+            f"Done. {total_added} new code(s) added from {total_paths} image(s).", "success"
+        )
+        self._scan_btn.config(state="normal", text="Scan All Images")
+        if hasattr(self, "_discord_fetch_btn"):
+            self._discord_fetch_btn.config(state="normal")
+
+    def _finish_discord_fetch(self) -> None:
+        self._scan_btn.config(state="normal")
+        if hasattr(self, "_discord_fetch_btn"):
+            self._discord_fetch_btn.config(state="normal", text="Fetch from Discord")
+        self._update_count()
+
     def _scan_uploaded(self) -> None:
         paths = list(self._file_paths)
         if not paths:
             messagebox.showinfo("No Files", "Browse and select images first.")
             return
         self._scan_btn.config(state="disabled", text="Scanning…")
+        if hasattr(self, "_discord_fetch_btn"):
+            self._discord_fetch_btn.config(state="disabled")
         self._append_log(f"Starting scan of {len(paths)} image(s)…", "info")
         self._log.info("Batch scan started: %d image(s)", len(paths))
         threading.Thread(target=self._run_batch_scan, args=(paths,), daemon=True).start()
@@ -455,13 +779,20 @@ class ScannerTab:
             try:
                 img = Image.open(path).convert("RGB")
                 codes = self._client.extract_codes(img)
+                if codes:
+                    self._frame.after(
+                        0, lambda c=len(codes), label=label: self._append_log(
+                            f"  {label}: {c} code(s) extracted, verifying…", "info"
+                        )
+                    )
+                    codes = self._client.verify_codes(img, codes)
                 added = self._add_codes(codes)
                 total_added += added
                 self._log.info("Image %s: found %s, added %d", label, codes, added)
                 self._frame.after(0, lambda p=path: self._set_file_status(p, "done"))
                 self._frame.after(
                     0, lambda codes=codes, added=added, label=label: self._append_log(
-                        f"  {label}: {len(codes)} code(s) found, {added} new.", "success"
+                        f"  {label}: {len(codes)} code(s) verified, {added} new.", "success"
                     )
                 )
             except Exception as exc:
@@ -479,17 +810,7 @@ class ScannerTab:
                 self._countdown_delay(int(BATCH_DELAY))
 
         self._log.info("Batch scan complete. Total new codes: %d", total_added)
-        self._frame.after(
-            0,
-            lambda: (
-                self._update_count(),
-                self._append_log(
-                    f"Done. {total_added} new code(s) added from {len(paths)} image(s).",
-                    "success",
-                ),
-                self._scan_btn.config(state="normal", text="Scan All Images"),
-            ),
-        )
+        self._frame.after(0, lambda: self._finish_file_scan(total_added, len(paths)))
 
     # ── Code management ───────────────────────────────────────────────────────
 
