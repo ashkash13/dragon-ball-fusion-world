@@ -1,57 +1,81 @@
 """
 Main tkinter GUI for the DBFW Code Scanner.
 
-Camera tab layout:
-  ┌──────────────────────────────────────┐
-  │         Live camera preview          │
-  │  [Capture & Scan]  [View Logs]       │  ← buttons always visible
-  │  [cooldown hint if active]           │
-  │  ┌──────────────────────────────┐    │
-  │  │ scrollable status / error    │    │  ← messages never push buttons off
-  │  │ log                          │    │
-  │  └──────────────────────────────┘    │
-  └──────────────────────────────────────┘
+Layout:
+  ┌──────────────────────────────────────────────────────────┬──────────────┐
+  │  Scan Card Images (header)                               │ Collected    │
+  │  [Browse Images…]  [Clear List]                          │ Codes list   │
+  │  (or drag & drop images here)                            │              │
+  │  ┌─ file list w/ status icons ──┬──── Preview ────────┐  │ [Export]     │
+  │  └──────────────────────────────┴────────────────────┘  │ [Remove]     │
+  │  [Scan All Images]  [View Logs]                          │ [Clear All]  │
+  │  Next image in 5s…                                       │ ──────────── │
+  │  ┌─ dark status log ─────────────────────────────────┐   │ [Change Key] │
+  │  └────────────────────────────────────────────────────┘  │              │
+  └──────────────────────────────────────────────────────────┴──────────────┘
 """
 import datetime
-import platform
-import queue
 import threading
 import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
 
-import cv2
 from PIL import Image, ImageTk
 
 from src.config import load_api_key, save_api_key
 from src.gemini_client import GeminiClient
 from src.logger import get_logger, log_path
 
+# ── Optional drag-and-drop support ────────────────────────────────────────────
+
+try:
+    from tkinterdnd2 import TkinterDnD, DND_FILES
+    _DND_AVAILABLE = True
+except ImportError:
+    TkinterDnD = None
+    DND_FILES = None
+    _DND_AVAILABLE = False
+
 # ── Constants ────────────────────────────────────────────────────────────────
 
 WINDOW_TITLE = "DBFW Code Scanner"
-PREVIEW_W = 500
-PREVIEW_H = 330
-SIDEBAR_W = 220
+SIDEBAR_W    = 220
+BATCH_DELAY  = 7.0   # seconds between images (keeps well under 10 RPM on free tier)
+PREVIEW_SIZE = 200   # px — square thumbnail canvas
 
-SCAN_COOLDOWN = 7   # seconds between camera scans (gemini-2.5-flash: 10 RPM → min 6s, using 7s)
-BATCH_DELAY = 7.0   # seconds between batch images (keeps well under 10 RPM on free tier)
+WINDOW_W = 980
+WINDOW_H = 540
 
-# Laplacian variance threshold for blur detection.
-# Typical values: crisp card text ~200+, acceptable ~80–200, blurry <80
-BLUR_THRESHOLD = 80
+STATUS_ICONS = {
+    "pending":  "[ ]",
+    "scanning": "[~]",
+    "done":     "[✓]",
+    "error":    "[!]",
+}
+STATUS_COLORS = {
+    "pending":  "#888888",
+    "scanning": "#0055cc",
+    "done":     "#007700",
+    "error":    "#cc0000",
+}
+
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+
+# ── Conditional base class (TkinterDnD.Tk when available, else tk.Tk) ─────────
+
+_BaseClass = TkinterDnD.Tk if _DND_AVAILABLE else tk.Tk
 
 
-# ── Main application ─────────────────────────────────────────────────────────
+# ── Main application ──────────────────────────────────────────────────────────
 
 
-class ScannerApp(tk.Tk):
+class ScannerApp(_BaseClass):
     def __init__(self) -> None:
         super().__init__()
         self.title(WINDOW_TITLE)
         self.resizable(True, True)
-        self.minsize(600, 520)
+        self.minsize(780, 460)
 
         self._log = get_logger()
         self._log.info("Application started")
@@ -59,14 +83,16 @@ class ScannerApp(tk.Tk):
         self._codes: list[str] = []
         self._client: GeminiClient | None = None
 
-        self._camera_running = False
-        self._camera_thread: threading.Thread | None = None
-        self._frame_queue: queue.Queue = queue.Queue(maxsize=2)
-        self._current_frame: Image.Image | None = None  # preprocessed, ready to scan
-        self._scanning = False
-        self._last_scan_time: float = 0.0
-        self._last_blur_score: float = 999.0
-        self._preview_running = False
+        # File list state (authoritative; listbox is a view over these)
+        self._file_paths: list[str] = []
+        self._file_statuses: dict[str, str] = {}
+
+        # Preview state — must hold reference to prevent GC blanking the canvas
+        self._preview_photo: ImageTk.PhotoImage | None = None
+
+        # Countdown StringVar created here so _countdown_delay can use it
+        # regardless of which screen is currently visible
+        self._countdown_var = tk.StringVar(value="")
 
         api_key = load_api_key()
         if api_key:
@@ -78,7 +104,7 @@ class ScannerApp(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    # ── Setup screen ─────────────────────────────────────────────────────────
+    # ── Setup screen ──────────────────────────────────────────────────────────
 
     def _build_setup_ui(self) -> None:
         self._clear_window()
@@ -158,352 +184,277 @@ class ScannerApp(tk.Tk):
         self._client = client
         self._build_main_ui()
 
-    # ── Main UI ──────────────────────────────────────────────────────────────
+    # ── Main UI ───────────────────────────────────────────────────────────────
 
     def _build_main_ui(self) -> None:
         self._clear_window()
-        self.geometry(f"{PREVIEW_W + SIDEBAR_W + 40}x{PREVIEW_H + 200}")
+        self.geometry(f"{WINDOW_W}x{WINDOW_H}")
 
         left = ttk.Frame(self, padding=(10, 10, 0, 10))
         left.pack(side="left", fill="both", expand=True)
 
-        self._tabs = ttk.Notebook(left)
-        self._tabs.pack(fill="both", expand=True)
-        self._tabs.bind("<<NotebookTabChanged>>", self._on_tab_changed)
-
-        self._build_camera_tab()
-        self._build_upload_tab()
+        self._build_scan_ui(left)
         self._build_sidebar()
-        self._start_camera()
 
-    # ── Camera tab ───────────────────────────────────────────────────────────
+    # ── Scan UI ───────────────────────────────────────────────────────────────
 
-    def _build_camera_tab(self) -> None:
-        tab = ttk.Frame(self._tabs, padding=8)
-        self._tabs.add(tab, text="  Camera Scanner  ")
-
-        # 1. Preview canvas
-        self._canvas = tk.Canvas(tab, width=PREVIEW_W, height=PREVIEW_H, bg="#111111")
-        self._canvas.pack()
-
-        # 2. Buttons — always visible immediately below the preview
-        btn_row = ttk.Frame(tab)
-        btn_row.pack(pady=(8, 2))
-
-        self._scan_btn = ttk.Button(
-            btn_row, text="Capture & Scan", command=self._capture_and_scan, state="disabled"
-        )
-        self._scan_btn.pack(side="left", padx=6)
-        ttk.Button(btn_row, text="View Logs", command=self._show_log_viewer).pack(
-            side="left", padx=6
-        )
-
-        # 3. Cooldown hint (1 line, only shown during cooldown)
-        self._cooldown_var = tk.StringVar(value="")
-        ttk.Label(tab, textvariable=self._cooldown_var, foreground="gray", font=("Helvetica", 9)).pack()
-
-        # 4. Scrollable status / error log
-        self._camera_log = scrolledtext.ScrolledText(
-            tab, height=5, state="disabled", wrap="word",
-            font=("Helvetica", 9), relief="flat", background="#f8f8f8"
-        )
-        self._camera_log.tag_config("error", foreground="#cc0000")
-        self._camera_log.tag_config("success", foreground="#007700")
-        self._camera_log.tag_config("info", foreground="#333333")
-        self._camera_log.pack(fill="both", expand=True, pady=(4, 0))
-
-        # Seed with initial message
-        self._append_camera_log("Starting camera…", "info")
-
-    def _append_camera_log(self, msg: str, level: str = "info") -> None:
-        """Append a timestamped line to the camera status log (thread-safe via after)."""
-        def _do():
-            ts = datetime.datetime.now().strftime("%H:%M:%S")
-            self._camera_log.config(state="normal")
-            self._camera_log.insert("end", f"[{ts}] {msg}\n", level)
-            self._camera_log.see("end")
-            self._camera_log.config(state="disabled")
-        # Call directly if on main thread, else schedule
-        try:
-            self.after(0, _do)
-        except Exception:
-            pass
-
-    # ── Upload tab ───────────────────────────────────────────────────────────
-
-    def _build_upload_tab(self) -> None:
-        tab = ttk.Frame(self._tabs, padding=8)
-        self._tabs.add(tab, text="  Image Upload  ")
-
+    def _build_scan_ui(self, parent: ttk.Frame) -> None:
+        # Header
         ttk.Label(
-            tab,
+            parent,
+            text="Scan Card Images",
+            font=("Helvetica", 12, "bold"),
+        ).pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            parent,
             text=(
-                "Select images containing Dragon Ball Fusion World cards.\n"
-                "Multiple cards per image are supported.\n"
-                "Supported formats: JPG, PNG, WEBP, BMP"
+                "Select photos of Dragon Ball Fusion World cards. "
+                "Multiple cards per image are supported. "
+                "Supported formats: JPG, PNG, WEBP, BMP, TIFF"
             ),
-            justify="center",
-        ).pack(pady=(16, 10))
+            font=("Helvetica", 9),
+            foreground="#555555",
+            wraplength=520,
+            justify="left",
+        ).pack(anchor="w", pady=(2, 6))
 
-        # Buttons first
-        btn_row = ttk.Frame(tab)
-        btn_row.pack()
+        ttk.Separator(parent, orient="horizontal").pack(fill="x", pady=(0, 8))
+
+        # Browse / Clear buttons
+        btn_row = ttk.Frame(parent)
+        btn_row.pack(anchor="w")
         ttk.Button(btn_row, text="Browse Images…", command=self._browse_images).pack(
-            side="left", padx=4
+            side="left", padx=6, pady=2
         )
         ttk.Button(btn_row, text="Clear List", command=self._clear_file_list).pack(
-            side="left", padx=4
+            side="left", padx=6, pady=2
         )
 
-        # File list
-        list_frame = ttk.Frame(tab)
-        list_frame.pack(fill="x", pady=8, padx=4)
+        # Drop zone hint (only shown when tkinterdnd2 is available)
+        if _DND_AVAILABLE:
+            ttk.Label(
+                parent,
+                text="(or drag & drop images here)",
+                font=("Helvetica", 8),
+                foreground="#888888",
+            ).pack(anchor="w", padx=6, pady=(0, 4))
+
+        # File list + Preview side by side
+        list_and_preview = ttk.Frame(parent)
+        list_and_preview.pack(fill="both", expand=False, pady=(0, 4))
+
+        # Left: file listbox with status icons
+        list_frame = ttk.Frame(list_and_preview)
+        list_frame.pack(side="left", fill="both", expand=True)
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self._file_listbox = tk.Listbox(
-            list_frame, height=6, font=("Helvetica", 9),
-            yscrollcommand=scrollbar.set, selectmode="extended",
+            list_frame, height=6, font=("Courier", 9),
+            yscrollcommand=scrollbar.set, selectmode="browse",
+            activestyle="none",
         )
         scrollbar.config(command=self._file_listbox.yview)
-        self._file_listbox.pack(side="left", fill="x", expand=True)
+        self._file_listbox.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
+        self._file_listbox.bind("<<ListboxSelect>>", self._on_file_select)
 
-        # Scan button + log viewer
-        btn_row2 = ttk.Frame(tab)
-        btn_row2.pack(pady=(0, 4))
-        self._scan_images_btn = ttk.Button(
+        # Right: preview pane
+        preview_frame = ttk.LabelFrame(
+            list_and_preview, text="Preview",
+            width=PREVIEW_SIZE + 16, height=PREVIEW_SIZE + 30,
+        )
+        preview_frame.pack(side="right", fill="y", padx=(8, 0))
+        preview_frame.pack_propagate(False)
+
+        self._preview_canvas = tk.Canvas(
+            preview_frame,
+            width=PREVIEW_SIZE,
+            height=PREVIEW_SIZE,
+            bg="#dddddd",
+            highlightthickness=0,
+        )
+        self._preview_canvas.pack(padx=4, pady=4)
+        self._preview_canvas.create_text(
+            PREVIEW_SIZE // 2, PREVIEW_SIZE // 2,
+            text="Select an image\nto preview",
+            fill="#888888",
+            justify="center",
+        )
+
+        # Register drag-and-drop targets
+        if _DND_AVAILABLE:
+            self._file_listbox.drop_target_register(DND_FILES)
+            self._file_listbox.dnd_bind("<<Drop>>", self._on_dnd_drop)
+            self.drop_target_register(DND_FILES)
+            self.dnd_bind("<<Drop>>", self._on_dnd_drop)
+
+        # Scan / Log buttons
+        btn_row2 = ttk.Frame(parent)
+        btn_row2.pack(anchor="w", pady=(4, 0))
+        self._scan_btn = ttk.Button(
             btn_row2, text="Scan All Images", command=self._scan_uploaded
         )
-        self._scan_images_btn.pack(side="left", padx=4)
+        self._scan_btn.pack(side="left", padx=6, pady=2)
         ttk.Button(btn_row2, text="View Logs", command=self._show_log_viewer).pack(
-            side="left", padx=4
+            side="left", padx=6, pady=2
         )
 
-        # Scrollable status log
-        self._upload_log = scrolledtext.ScrolledText(
-            tab, height=5, state="disabled", wrap="word",
-            font=("Helvetica", 9), relief="flat", background="#f8f8f8"
-        )
-        self._upload_log.tag_config("error", foreground="#cc0000")
-        self._upload_log.tag_config("success", foreground="#007700")
-        self._upload_log.tag_config("info", foreground="#333333")
-        self._upload_log.pack(fill="both", expand=True)
+        # Countdown label (empty when idle)
+        ttk.Label(
+            parent,
+            textvariable=self._countdown_var,
+            foreground="#0055cc",
+            font=("Helvetica", 9, "italic"),
+        ).pack(anchor="w", padx=6, pady=(2, 0))
 
-    def _append_upload_log(self, msg: str, level: str = "info") -> None:
+        # Dark scrollable status log
+        self._scan_log = scrolledtext.ScrolledText(
+            parent, height=7, state="disabled", wrap="word",
+            font=("Courier", 9), relief="flat",
+            background="#1e1e1e", foreground="#dddddd",
+        )
+        self._scan_log.tag_config("error",   foreground="#ff6b6b")
+        self._scan_log.tag_config("success", foreground="#6bcb77")
+        self._scan_log.tag_config("info",    foreground="#cccccc")
+        self._scan_log.pack(fill="both", expand=True)
+
+    def _append_log(self, msg: str, level: str = "info") -> None:
         def _do():
             ts = datetime.datetime.now().strftime("%H:%M:%S")
-            self._upload_log.config(state="normal")
-            self._upload_log.insert("end", f"[{ts}] {msg}\n", level)
-            self._upload_log.see("end")
-            self._upload_log.config(state="disabled")
+            self._scan_log.config(state="normal")
+            self._scan_log.insert("end", f"[{ts}] {msg}\n", level)
+            self._scan_log.see("end")
+            self._scan_log.config(state="disabled")
         self.after(0, _do)
 
-    # ── Sidebar ──────────────────────────────────────────────────────────────
+    # ── Sidebar ───────────────────────────────────────────────────────────────
 
     def _build_sidebar(self) -> None:
-        sidebar = ttk.Frame(self, padding=10, width=SIDEBAR_W)
+        # Use a plain tk.Frame with a subtle background to visually separate the sidebar
+        sidebar = tk.Frame(self, bg="#e8e8e8", width=SIDEBAR_W)
         sidebar.pack(side="right", fill="y")
         sidebar.pack_propagate(False)
 
-        ttk.Label(sidebar, text="Collected Codes", font=("Helvetica", 12, "bold")).pack(anchor="w")
-        ttk.Separator(sidebar, orient="horizontal").pack(fill="x", pady=6)
+        inner = ttk.Frame(sidebar, padding=10)
+        inner.pack(fill="both", expand=True)
 
-        list_frame = ttk.Frame(sidebar)
+        ttk.Label(inner, text="Collected Codes", font=("Helvetica", 12, "bold")).pack(anchor="w")
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=6)
+
+        list_frame = ttk.Frame(inner)
         list_frame.pack(fill="both", expand=True)
         scrollbar = ttk.Scrollbar(list_frame, orient="vertical")
         self._code_listbox = tk.Listbox(
             list_frame, font=("Courier", 10),
-            yscrollcommand=scrollbar.set, selectmode="single", activestyle="none",
+            yscrollcommand=scrollbar.set, selectmode="extended", activestyle="none",
         )
         scrollbar.config(command=self._code_listbox.yview)
         self._code_listbox.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
 
         self._count_var = tk.StringVar(value="0 codes")
-        ttk.Label(sidebar, textvariable=self._count_var, font=("Helvetica", 9)).pack(
+        ttk.Label(inner, textvariable=self._count_var, font=("Helvetica", 9)).pack(
             anchor="w", pady=(4, 2)
         )
-        ttk.Button(sidebar, text="Export codes.txt", command=self._export).pack(fill="x", pady=(4, 2))
-        ttk.Button(sidebar, text="Remove Selected", command=self._remove_selected).pack(fill="x", pady=2)
-        ttk.Button(sidebar, text="Clear All", command=self._clear_codes).pack(fill="x", pady=2)
-        ttk.Separator(sidebar, orient="horizontal").pack(fill="x", pady=6)
-        ttk.Button(sidebar, text="Change API Key", command=self._change_api_key).pack(fill="x", pady=2)
+        ttk.Button(inner, text="Export codes.txt", command=self._export).pack(fill="x", pady=(4, 2))
+        ttk.Button(inner, text="Remove Selected", command=self._remove_selected).pack(fill="x", pady=2)
+        ttk.Button(inner, text="Clear All", command=self._clear_codes).pack(fill="x", pady=2)
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=6)
+        ttk.Button(inner, text="Change API Key", command=self._change_api_key).pack(fill="x", pady=2)
 
-    # ── Camera logic ─────────────────────────────────────────────────────────
+    # ── File list state management ─────────────────────────────────────────────
 
-    def _start_camera(self) -> None:
-        if self._camera_running:
+    def _add_files(self, paths) -> None:
+        """Shared logic for both Browse and drag-and-drop. Deduplicates, filters by extension."""
+        existing = set(self._file_paths)
+        added = 0
+        for p in paths:
+            p = str(p).strip()
+            if p and p not in existing and Path(p).suffix.lower() in _IMAGE_EXTS:
+                self._file_paths.append(p)
+                self._file_statuses[p] = "pending"
+                existing.add(p)
+                added += 1
+        self._refresh_file_listbox()
+        count = len(self._file_paths)
+        if count:
+            self._append_log(
+                f"{count} file(s) queued.{f'  (+{added} new)' if added else ''}", "info"
+            )
+
+    def _refresh_file_listbox(self) -> None:
+        """Rebuild the listbox entirely from _file_paths + _file_statuses."""
+        self._file_listbox.delete(0, "end")
+        for i, path in enumerate(self._file_paths):
+            status = self._file_statuses.get(path, "pending")
+            self._file_listbox.insert("end", f"{STATUS_ICONS[status]} {Path(path).name}")
+            self._file_listbox.itemconfigure(i, foreground=STATUS_COLORS[status])
+
+    def _set_file_status(self, path: str, status: str) -> None:
+        """Update a single file's status and refresh the listbox."""
+        self._file_statuses[path] = status
+        self._refresh_file_listbox()
+        # Re-select the same row so the selection doesn't jump away
+        if path in self._file_paths:
+            idx = self._file_paths.index(path)
+            self._file_listbox.selection_clear(0, "end")
+            self._file_listbox.selection_set(idx)
+            self._file_listbox.see(idx)
+
+    # ── Preview ───────────────────────────────────────────────────────────────
+
+    def _on_file_select(self, event=None) -> None:
+        sel = self._file_listbox.curselection()
+        if not sel:
             return
-        self._camera_running = True
-        self._preview_running = True
-        self._camera_thread = threading.Thread(target=self._camera_loop, daemon=True)
-        self._camera_thread.start()
-        self._update_preview()
+        idx = sel[0]
+        if idx < len(self._file_paths):
+            self._load_preview(self._file_paths[idx])
 
-    def _stop_camera(self) -> None:
-        self._camera_running = False
-
-    def _blur_score(self, frame_bgr) -> float:
-        """
-        Return the Laplacian variance of the frame — a standard focus/sharpness metric.
-        Higher = sharper. Below ~80 is noticeably blurry for card text.
-        """
-        gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
-        return float(cv2.Laplacian(gray, cv2.CV_64F).var())
-
-    def _preprocess_frame(self, frame_bgr):
-        """
-        Reduce glare and sharpen the image for card scanning.
-
-        Note: no horizontal flip is applied. cv2.VideoCapture returns the raw
-        unmirrored sensor frame — flipping it would reverse text orientation and
-        cause misreads. Gemini handles any text orientation natively.
-
-        Steps:
-          1. CLAHE on the L channel of LAB — boosts local contrast so code text
-             stands out even when the card surface has glare.
-          2. Unsharp mask — sharpens soft edges to help Gemini distinguish
-             similar characters (Z vs 2, B vs 8, etc.).
-        """
-        # 1. CLAHE contrast enhancement on luminance channel
-        lab = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
-        l_enhanced = clahe.apply(l)
-        enhanced = cv2.cvtColor(cv2.merge([l_enhanced, a, b]), cv2.COLOR_LAB2BGR)
-
-        # 2. Unsharp mask — subtract a blurred version to boost fine detail
-        blurred = cv2.GaussianBlur(enhanced, (0, 0), sigmaX=2)
-        sharpened = cv2.addWeighted(enhanced, 1.5, blurred, -0.5, 0)
-
-        return sharpened
-
-    def _camera_loop(self) -> None:
-        backend = cv2.CAP_DSHOW if platform.system() == "Windows" else cv2.CAP_ANY
-        self._log.info("Opening camera (backend=%s)", backend)
-        cap = cv2.VideoCapture(0, backend)
-
-        if not cap.isOpened():
-            msg = "No camera found. Check your camera connection."
-            self._log.error(msg)
-            self.after(0, lambda: self._append_camera_log(msg, "error"))
-            return
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self._log.info("Camera opened successfully")
-
-        self.after(
-            0,
-            lambda: (
-                self._append_camera_log(
-                    "Camera ready — hold a card up and click Capture & Scan.", "info"
-                ),
-                self._scan_btn.config(state="normal"),
-            ),
-        )
-
-        while self._camera_running:
-            ret, frame = cap.read()
-            if not ret:
-                time.sleep(0.05)
-                continue
-
-            # Measure sharpness on the raw frame before preprocessing
-            self._last_blur_score = self._blur_score(frame)
-
-            processed = self._preprocess_frame(frame)
-            rgb = cv2.cvtColor(processed, cv2.COLOR_BGR2RGB)
-            preview = Image.fromarray(rgb).resize((PREVIEW_W, PREVIEW_H), Image.LANCZOS)
-
-            # Store full-resolution preprocessed image for scanning
-            self._current_frame = Image.fromarray(rgb)
-
-            if not self._frame_queue.full():
-                self._frame_queue.put_nowait(preview)
-
-            time.sleep(0.033)  # ~30 fps
-
-        cap.release()
-        self._log.info("Camera released")
-
-    def _update_preview(self) -> None:
-        if not self._preview_running:
-            return
+    def _load_preview(self, path: str) -> None:
         try:
-            img = self._frame_queue.get_nowait()
-            imgtk = ImageTk.PhotoImage(image=img)
-            self._canvas.imgtk = imgtk
-            self._canvas.create_image(0, 0, anchor="nw", image=imgtk)
-        except queue.Empty:
-            pass
-        self.after(33, self._update_preview)
-
-    def _capture_and_scan(self) -> None:
-        if self._scanning or self._current_frame is None:
-            return
-
-        elapsed = time.time() - self._last_scan_time
-        if elapsed < SCAN_COOLDOWN:
-            remaining = int(SCAN_COOLDOWN - elapsed) + 1
-            self._cooldown_var.set(f"⏳ Wait {remaining}s before next scan")
-            return
-
-        # Blur check — warn but still allow the user to proceed
-        if self._last_blur_score < BLUR_THRESHOLD:
-            self._append_camera_log(
-                f"⚠️ Image looks blurry (sharpness score: {self._last_blur_score:.0f}, "
-                f"minimum recommended: {BLUR_THRESHOLD}). "
-                "Hold the card still and further from the camera, then try again. "
-                "Click Capture & Scan again to send anyway.",
-                "error",
-            )
-            # On the second click within 3 seconds, send anyway
-            now = time.time()
-            if now - getattr(self, "_blur_warn_time", 0) > 3:
-                self._blur_warn_time = now
-                return
-
-        self._cooldown_var.set("")
-        self._scanning = True
-        self._scan_btn.config(state="disabled")
-        self._append_camera_log(
-            f"Sending to Gemini… (sharpness score: {self._last_blur_score:.0f})", "info"
-        )
-        self._log.info("Camera scan triggered (blur score=%.1f)", self._last_blur_score)
-
-        frame = self._current_frame.copy()
-        threading.Thread(target=self._run_camera_scan, args=(frame,), daemon=True).start()
-
-    def _run_camera_scan(self, image: Image.Image) -> None:
-        try:
-            codes = self._client.extract_codes(image)
-            self._last_scan_time = time.time()
-            self._log.info("Camera scan result: %s", codes)
-            self.after(0, lambda: self._handle_scan_result(codes))
-        except Exception as exc:
-            self._log.error("Camera scan error: %s", exc, exc_info=True)
-            self.after(0, lambda: self._append_camera_log(f"Error: {exc}", "error"))
-        finally:
-            self.after(
-                0,
-                lambda: (
-                    self._scan_btn.config(state="normal"),
-                    setattr(self, "_scanning", False),
-                ),
+            img = Image.open(path)
+            img.thumbnail((PREVIEW_SIZE, PREVIEW_SIZE), Image.LANCZOS)
+            # Pad thumbnail to a square gray background
+            canvas_img = Image.new("RGB", (PREVIEW_SIZE, PREVIEW_SIZE), (220, 220, 220))
+            offset_x = (PREVIEW_SIZE - img.width) // 2
+            offset_y = (PREVIEW_SIZE - img.height) // 2
+            canvas_img.paste(img, (offset_x, offset_y))
+            # Store as instance attr — PhotoImage is GC'd if only held locally
+            self._preview_photo = ImageTk.PhotoImage(canvas_img)
+            self._preview_canvas.delete("all")
+            self._preview_canvas.create_image(0, 0, anchor="nw", image=self._preview_photo)
+        except Exception:
+            self._preview_canvas.delete("all")
+            self._preview_canvas.create_text(
+                PREVIEW_SIZE // 2, PREVIEW_SIZE // 2,
+                text="Cannot load\npreview",
+                fill="#cc0000",
+                justify="center",
             )
 
-    def _handle_scan_result(self, codes: list[str]) -> None:
-        if not codes:
-            self._append_camera_log(
-                "No code detected — try adjusting position or lighting.", "error"
-            )
-            return
-        added = self._add_codes(codes)
-        self._append_camera_log(
-            f"Found {len(codes)} code(s). {added} new added to list.", "success"
-        )
+    # ── Drag-and-drop ─────────────────────────────────────────────────────────
 
-    # ── Upload logic ─────────────────────────────────────────────────────────
+    def _on_dnd_drop(self, event) -> None:
+        """Handle file drops from the OS file manager."""
+        # tk.splitlist handles both {braced paths with spaces} (Windows) and
+        # space-separated paths (macOS) correctly via Tcl's native list parsing.
+        paths = self.tk.splitlist(event.data.strip())
+        self._add_files(paths)
+
+    # ── Countdown timer ───────────────────────────────────────────────────────
+
+    def _countdown_delay(self, seconds: int) -> None:
+        """Called from the batch daemon thread. Ticks down 1s at a time,
+        posting a GUI update each tick via after(0, ...)."""
+        for remaining in range(seconds, 0, -1):
+            self.after(0, self._set_countdown_label, remaining)
+            time.sleep(1)
+        self.after(0, self._set_countdown_label, 0)
+
+    def _set_countdown_label(self, remaining: int) -> None:
+        self._countdown_var.set(f"Next image in {remaining}s…" if remaining > 0 else "")
+
+    # ── Scan logic ────────────────────────────────────────────────────────────
 
     def _browse_images(self) -> None:
         paths = filedialog.askopenfilenames(
@@ -513,28 +464,31 @@ class ScannerApp(tk.Tk):
                 ("All files", "*.*"),
             ],
         )
-        existing = set(self._file_listbox.get(0, "end"))
-        added = 0
-        for p in paths:
-            if p not in existing:
-                self._file_listbox.insert("end", p)
-                added += 1
-        count = self._file_listbox.size()
-        self._append_upload_log(
-            f"{count} file(s) queued.{f'  (+{added} new)' if added else ''}", "info"
-        )
+        if paths:
+            self._add_files(paths)
 
     def _clear_file_list(self) -> None:
-        self._file_listbox.delete(0, "end")
-        self._append_upload_log("File list cleared.", "info")
+        self._file_paths.clear()
+        self._file_statuses.clear()
+        self._refresh_file_listbox()
+        # Reset preview pane
+        self._preview_photo = None
+        self._preview_canvas.delete("all")
+        self._preview_canvas.create_text(
+            PREVIEW_SIZE // 2, PREVIEW_SIZE // 2,
+            text="Select an image\nto preview",
+            fill="#888888",
+            justify="center",
+        )
+        self._append_log("File list cleared.", "info")
 
     def _scan_uploaded(self) -> None:
-        paths = list(self._file_listbox.get(0, "end"))
+        paths = list(self._file_paths)
         if not paths:
             messagebox.showinfo("No Files", "Browse and select images first.")
             return
-        self._scan_images_btn.config(state="disabled")
-        self._append_upload_log(f"Starting batch scan of {len(paths)} image(s)…", "info")
+        self._scan_btn.config(state="disabled", text="Scanning…")
+        self._append_log(f"Starting scan of {len(paths)} image(s)…", "info")
         self._log.info("Batch scan started: %d image(s)", len(paths))
         threading.Thread(target=self._run_batch_scan, args=(paths,), daemon=True).start()
 
@@ -543,25 +497,29 @@ class ScannerApp(tk.Tk):
         for i, path in enumerate(paths, start=1):
             label = Path(path).name
             self.after(
-                0, lambda i=i, label=label: self._append_upload_log(
+                0, lambda i=i, label=label: self._append_log(
                     f"Scanning {i}/{len(paths)}: {label}", "info"
                 )
             )
+            self.after(0, lambda p=path: self._set_file_status(p, "scanning"))
+
             try:
                 img = Image.open(path).convert("RGB")
                 codes = self._client.extract_codes(img)
                 added = self._add_codes(codes)
                 total_added += added
                 self._log.info("Image %s: found %s, added %d", label, codes, added)
+                self.after(0, lambda p=path: self._set_file_status(p, "done"))
                 self.after(
-                    0, lambda codes=codes, added=added, label=label: self._append_upload_log(
+                    0, lambda codes=codes, added=added, label=label: self._append_log(
                         f"  {label}: {len(codes)} code(s) found, {added} new.", "success"
                     )
                 )
             except Exception as exc:
                 self._log.error("Error scanning %s: %s", label, exc, exc_info=True)
+                self.after(0, lambda p=path: self._set_file_status(p, "error"))
                 self.after(
-                    0, lambda exc=exc, label=label: self._append_upload_log(
+                    0, lambda exc=exc, label=label: self._append_log(
                         f"  Error on {label}: {exc}", "error"
                     )
                 )
@@ -569,21 +527,22 @@ class ScannerApp(tk.Tk):
                 continue
 
             if i < len(paths):
-                time.sleep(BATCH_DELAY)
+                self._countdown_delay(int(BATCH_DELAY))
 
         self._log.info("Batch scan complete. Total new codes: %d", total_added)
         self.after(
             0,
             lambda: (
                 self._update_count(),
-                self._append_upload_log(
-                    f"Done. {total_added} new code(s) added from {len(paths)} image(s).", "success"
+                self._append_log(
+                    f"Done. {total_added} new code(s) added from {len(paths)} image(s).",
+                    "success",
                 ),
-                self._scan_images_btn.config(state="normal"),
+                self._scan_btn.config(state="normal", text="Scan All Images"),
             ),
         )
 
-    # ── Code management ──────────────────────────────────────────────────────
+    # ── Code management ───────────────────────────────────────────────────────
 
     def _add_codes(self, codes: list[str]) -> int:
         added = 0
@@ -605,9 +564,10 @@ class ScannerApp(tk.Tk):
         sel = self._code_listbox.curselection()
         if not sel:
             return
-        idx = sel[0]
-        self._codes.pop(idx)
-        self._code_listbox.delete(idx)
+        # Delete in reverse order so earlier indices stay valid as items are removed
+        for idx in reversed(sel):
+            self._codes.pop(idx)
+            self._code_listbox.delete(idx)
         self._update_count()
 
     def _clear_codes(self) -> None:
@@ -634,7 +594,7 @@ class ScannerApp(tk.Tk):
         self._log.info("Exported %d codes to %s", len(self._codes), path)
         messagebox.showinfo("Exported", f"Saved {len(self._codes)} code(s) to:\n{path}")
 
-    # ── Log viewer ───────────────────────────────────────────────────────────
+    # ── Log viewer ────────────────────────────────────────────────────────────
 
     def _show_log_viewer(self) -> None:
         win = tk.Toplevel(self)
@@ -687,20 +647,11 @@ class ScannerApp(tk.Tk):
         ttk.Button(btn_row, text="Close", command=win.destroy).pack(side="left", padx=4)
         refresh()
 
-    # ── Tab / API key ────────────────────────────────────────────────────────
-
-    def _on_tab_changed(self, _event) -> None:
-        if self._tabs.index("current") == 0:
-            self._start_camera()
-        else:
-            self._stop_camera()
+    # ── Utilities ─────────────────────────────────────────────────────────────
 
     def _change_api_key(self) -> None:
         self._log.info("User requested API key change")
-        self._stop_camera()
         self._build_setup_ui()
-
-    # ── Utilities ────────────────────────────────────────────────────────────
 
     def _clear_window(self) -> None:
         for widget in self.winfo_children():
@@ -708,6 +659,4 @@ class ScannerApp(tk.Tk):
 
     def _on_close(self) -> None:
         self._log.info("Application closing")
-        self._preview_running = False
-        self._camera_running = False
         self.destroy()

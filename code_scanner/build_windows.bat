@@ -11,13 +11,12 @@ pyinstaller ^
   --onefile ^
   --windowed ^
   --name "DBFWScanner" ^
-  --hidden-import "google.generativeai" ^
-  --hidden-import "google.ai.generativelanguage_v1beta" ^
+  --hidden-import "google.genai" ^
   --hidden-import "google.auth" ^
   --hidden-import "google.auth.transport.requests" ^
   --hidden-import "PIL._tkinter_finder" ^
-  --hidden-import "cv2" ^
-  --collect-all "google.generativeai" ^
+  --collect-all "google.genai" ^
+  --collect-all "tkinterdnd2" ^
   main.py
 
 echo.
