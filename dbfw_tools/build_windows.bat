@@ -45,13 +45,10 @@ echo.
 echo  Step 2/2 — Building installer wizard with Inno Setup...
 echo.
 
-set ISCC=
-if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
-    set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
-)
-if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" (
-    set ISCC="%ProgramFiles%\Inno Setup 6\ISCC.exe"
-)
+set "ISCC="
+set "PFx86=%ProgramFiles(x86)%"
+if exist "%PFx86%\Inno Setup 6\ISCC.exe" set "ISCC=%PFx86%\Inno Setup 6\ISCC.exe"
+if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
 
 if "%ISCC%"=="" (
     echo  Inno Setup not found — skipping installer build.
@@ -60,16 +57,19 @@ if "%ISCC%"=="" (
     echo  Then re-run this script.
     echo.
     echo  Distributable: dist\DBFWTools.exe
-) else (
-    %ISCC% installer_windows.iss
-    echo.
-    if exist installer_output\DBFWTools_Setup.exe (
-        echo  SUCCESS: installer_output\DBFWTools_Setup.exe created.
-        echo  Share this file with end users.
-    ) else (
-        echo  Inno Setup compilation failed. Check the output above.
-    )
+    goto :done
 )
+
+"%ISCC%" installer_windows.iss
+echo.
+if exist installer_output\DBFWTools_Setup.exe (
+    echo  SUCCESS: installer_output\DBFWTools_Setup.exe created.
+    echo  Share this file with end users.
+) else (
+    echo  Inno Setup compilation failed. Check the output above.
+)
+
+:done
 
 echo.
 pause
