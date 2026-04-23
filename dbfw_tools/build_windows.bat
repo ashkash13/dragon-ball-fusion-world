@@ -1,11 +1,21 @@
 @echo off
 REM ============================================================
-REM  Build script for Windows — produces DBFWTools.exe
-REM  Run this from the project root in a venv that has all
-REM  dependencies installed (pip install -r requirements.txt)
+REM  Build script for Windows
+REM  Step 1: PyInstaller → dist\DBFWTools.exe
+REM  Step 2: Inno Setup  → installer_output\DBFWTools_Setup.exe
+REM
+REM  Run from the dbfw_tools\ directory with the venv active:
+REM    .venv\Scripts\activate
+REM    build_windows.bat
+REM
+REM  Inno Setup 6 is optional. If installed, the full installer
+REM  wizard is built automatically after PyInstaller.
+REM  Download from: https://jrsoftware.org/isinfo.php
 REM ============================================================
 
-echo Building Dragon Ball Fusion World Tools for Windows...
+echo.
+echo  Step 1/2 — Building executable with PyInstaller...
+echo.
 
 pyinstaller ^
   --onefile ^
@@ -22,9 +32,44 @@ pyinstaller ^
   main.py
 
 echo.
-if exist dist\DBFWTools.exe (
-    echo SUCCESS: dist\DBFWTools.exe created.
-) else (
-    echo FAILED: Check the output above for errors.
+if not exist dist\DBFWTools.exe (
+    echo  FAILED: PyInstaller did not produce dist\DBFWTools.exe
+    echo  Check the output above for errors.
+    pause
+    exit /b 1
 )
+echo  PyInstaller succeeded: dist\DBFWTools.exe created.
+
+REM ── Step 2: Inno Setup installer (optional) ───────────────────────────────
+echo.
+echo  Step 2/2 — Building installer wizard with Inno Setup...
+echo.
+
+set ISCC=
+if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" (
+    set ISCC="%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+)
+if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" (
+    set ISCC="%ProgramFiles%\Inno Setup 6\ISCC.exe"
+)
+
+if "%ISCC%"=="" (
+    echo  Inno Setup not found — skipping installer build.
+    echo  To build the installer wizard, install Inno Setup 6 from:
+    echo    https://jrsoftware.org/isinfo.php
+    echo  Then re-run this script.
+    echo.
+    echo  Distributable: dist\DBFWTools.exe
+) else (
+    %ISCC% installer_windows.iss
+    echo.
+    if exist installer_output\DBFWTools_Setup.exe (
+        echo  SUCCESS: installer_output\DBFWTools_Setup.exe created.
+        echo  Share this file with end users.
+    ) else (
+        echo  Inno Setup compilation failed. Check the output above.
+    )
+)
+
+echo.
 pause

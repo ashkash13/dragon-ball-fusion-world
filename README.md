@@ -4,6 +4,32 @@ A desktop application that scans Dragon Ball Fusion World card redemption codes 
 
 ---
 
+## Quick Start (Non-Technical Users)
+
+### Step 1 — Install Python
+
+Download and install **Python 3.11 or newer** from [python.org/downloads](https://www.python.org/downloads/).
+
+- **Windows:** During installation, check **"Add Python to PATH"** before clicking Install Now.
+- **macOS:** Use the python.org installer (not Homebrew) to ensure tkinter is included.
+
+### Step 2 — Download the app
+
+Download and unzip the `dbfw_tools` folder to anywhere on your computer (e.g. your Desktop).
+
+### Step 3 — Run the app
+
+- **Windows:** Double-click **`run_windows.bat`**
+- **macOS:** Double-click **`run_mac.command`**
+
+On first launch the script installs all required dependencies into a local folder (`.venv`) — this takes about a minute and only happens once. After that, the app opens immediately every time.
+
+> **macOS note:** If macOS blocks the script, right-click `run_mac.command` → **Open** → **Open** to allow it. You only need to do this once.
+
+> **macOS Redeemer note:** The Redeemer tab controls your keyboard and mouse to type codes into the game. macOS requires Accessibility permission for this. When prompted, go to **System Settings → Privacy & Security → Accessibility** and add the Terminal app (or DBFWTools if using the standalone build).
+
+---
+
 ## Overview
 
 **DBFW Tools** is a two-tab application:
@@ -156,25 +182,57 @@ Once configured, send card photos to the channel from your phone and click **Fet
 
 ---
 
-## Building a Standalone Executable
+## Building Distributable Installers
 
-To produce a single distributable binary that doesn't require Python:
+These scripts produce polished installers that require no Python installation from the end user.
 
-**Windows:**
+### Windows — Installer Wizard (`DBFWTools_Setup.exe`)
+
+The build script runs PyInstaller first, then automatically runs [Inno Setup](https://jrsoftware.org/isinfo.php) if it is installed to produce a full wizard installer.
+
 ```bat
 cd dbfw_tools
+.venv\Scripts\activate
 build_windows.bat
 ```
-Output: `dbfw_tools/dist/DBFWTools.exe`
 
-**macOS:**
+The wizard guides users through:
+- Installation folder selection
+- Optional desktop shortcut
+- Optional Start Menu entry
+- Launch app on finish
+- Full uninstaller included
+
+**Outputs:**
+- `dist\DBFWTools.exe` — standalone binary (always produced)
+- `installer_output\DBFWTools_Setup.exe` — wizard installer (produced if Inno Setup is installed)
+
+To build the wizard installer, install **Inno Setup 6** from [jrsoftware.org/isinfo.php](https://jrsoftware.org/isinfo.php) — it's free. Once installed, `build_windows.bat` detects it automatically and produces both outputs.
+
+---
+
+### macOS — DMG (`DBFWTools.dmg`)
+
 ```bash
 cd dbfw_tools
+source .venv/bin/activate
 bash build_mac.sh
 ```
-Output: `dbfw_tools/dist/DBFWTools`
 
-On macOS, grant Accessibility permission on first launch: **System Settings → Privacy & Security → Accessibility → add the app**.
+The script runs PyInstaller to produce `dist/DBFWTools.app`, then uses [create-dmg](https://github.com/create-dmg/create-dmg) to package it into a professional DMG with a drag-to-Applications layout — the standard macOS distribution format.
+
+**Outputs:**
+- `dist/DBFWTools.app` — app bundle (always produced)
+- `DBFWTools.dmg` — distributable DMG (produced if create-dmg is installed)
+
+To build the DMG, install **create-dmg** via Homebrew:
+```bash
+brew install create-dmg
+```
+
+Once installed, `build_mac.sh` detects it automatically.
+
+> On first launch, macOS requires Accessibility permission for the Redeemer tab (keyboard/mouse automation): **System Settings → Privacy & Security → Accessibility → add DBFWTools**.
 
 ---
 
