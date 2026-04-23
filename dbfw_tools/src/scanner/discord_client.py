@@ -12,10 +12,33 @@ Required bot permissions:
 import io
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 
-_SESSION = requests.Session()
+
+def _make_session() -> requests.Session:
+    """
+    Create a requests Session with automatic retry on dropped connections.
+
+    Discord's API closes idle connections after a few minutes. Without retry
+    logic, reusing a session after a gap (e.g. after a long redeemer run)
+    raises RemoteDisconnected. urllib3 treats this as a read error and will
+    transparently retry up to 3 times with short backoff before raising.
+    """
+    session = requests.Session()
+    retry = Retry(
+        total=3,
+        read=3,               # retries RemoteDisconnected / ProtocolError
+        backoff_factor=0.3,   # waits 0s, 0.3s, 0.6s between attempts
+        raise_on_status=False,
+    )
+    session.mount("https://", HTTPAdapter(max_retries=retry))
+    return session
+
+
+_SESSION = _make_session()
 
 
 class DiscordError(Exception):

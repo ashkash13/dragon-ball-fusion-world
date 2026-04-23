@@ -23,8 +23,8 @@ after real-world testing via the constants at the top of this file.
 """
 import time
 
-import numpy as np
 import pyautogui
+from PIL import ImageStat
 
 from src.logger import get_redeemer_logger as get_logger
 from src.redeemer.window import WindowRect
@@ -105,8 +105,7 @@ def calibrate_baseline(win: WindowRect) -> float:
     for label, rel in BANNER_REGIONS:
         region = win.abs_region(*rel)
         shot = pyautogui.screenshot(region=region)
-        arr = np.array(shot, dtype=np.uint8)
-        brightness = float(arr.mean())
+        brightness = sum(ImageStat.Stat(shot).mean) / 3
         _log.debug("  calibrate: %s baseline brightness=%.1f", label, brightness)
         readings.append(brightness)
     baseline = max(readings)
@@ -139,8 +138,7 @@ def wait_for_dialog(win: WindowRect, baseline: float) -> str:
         for label, rel in BANNER_REGIONS:
             region = win.abs_region(*rel)
             shot = pyautogui.screenshot(region=region)
-            arr = np.array(shot, dtype=np.uint8)
-            brightness = float(arr.mean())
+            brightness = sum(ImageStat.Stat(shot).mean) / 3
             _log.debug(
                 "  [poll %d] %s banner brightness=%.1f (threshold=%.1f)",
                 poll, label, brightness, threshold,
@@ -172,26 +170,16 @@ def detect_result(win: WindowRect) -> str:
     # normal log for threshold tuning without enabling debug mode.
     #
     # Signal 1 — full body region bright-pixel ratio (original method)
-    body_region = win.abs_region(*BODY_REL)
-    body_shot   = pyautogui.screenshot(region=body_region)
-    body_arr    = np.array(body_shot, dtype=np.uint8)
-    bright_mask = (
-        (body_arr[:, :, 0] > 180) &
-        (body_arr[:, :, 1] > 180) &
-        (body_arr[:, :, 2] > 180)
-    )
-    full_ratio = float(bright_mask.mean())
+    body_region  = win.abs_region(*BODY_REL)
+    body_shot    = pyautogui.screenshot(region=body_region)
+    body_pixels  = body_shot.getdata()
+    full_ratio   = sum(1 for r, g, b in body_pixels if r > 180 and g > 180 and b > 180) / len(body_pixels)
 
     # Signal 2 — lower-half region only (where the 2nd line of INVALID text sits)
     lower_region = win.abs_region(*BODY_LOWER_REL)
     lower_shot   = pyautogui.screenshot(region=lower_region)
-    lower_arr    = np.array(lower_shot, dtype=np.uint8)
-    lower_mask   = (
-        (lower_arr[:, :, 0] > 180) &
-        (lower_arr[:, :, 1] > 180) &
-        (lower_arr[:, :, 2] > 180)
-    )
-    lower_ratio = float(lower_mask.mean())
+    lower_pixels = lower_shot.getdata()
+    lower_ratio  = sum(1 for r, g, b in lower_pixels if r > 180 and g > 180 and b > 180) / len(lower_pixels)
 
     _log.info(
         "  detect_result: full_ratio=%.4f  lower_ratio=%.4f"
