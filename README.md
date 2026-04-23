@@ -88,7 +88,7 @@ The Scanner uses Google Gemini AI to read codes from your card photos. A free AP
 **Steps:**
 
 1. Go to [aistudio.google.com](https://aistudio.google.com) and sign in with any Google account
-2. Click **Get API Key** in the top navigation
+2. Click **Get API Key** in the bottom left pane
 3. Click **Create API key** → choose any Google Cloud project (or create a new one)
 4. Copy the key that appears
 
