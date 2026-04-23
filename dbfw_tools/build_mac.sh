@@ -59,6 +59,10 @@ if ! command -v create-dmg &>/dev/null; then
     exit 0
 fi
 
+# Copy the uninstaller into dist/ so create-dmg picks it up alongside the app.
+cp uninstall_mac.command dist/
+chmod +x dist/uninstall_mac.command
+
 # Remove old DMG if it exists
 rm -f DBFWTools.dmg
 
@@ -66,11 +70,12 @@ create-dmg \
   --volname "Dragon Ball Fusion World Tools" \
   --volicon "dist/DBFWTools.app/Contents/Resources/icon-windowed.icns" \
   --window-pos 200 120 \
-  --window-size 660 400 \
+  --window-size 660 460 \
   --icon-size 128 \
   --icon "DBFWTools.app" 180 185 \
   --hide-extension "DBFWTools.app" \
   --app-drop-link 480 185 \
+  --icon "uninstall_mac.command" 330 360 \
   --no-internet-enable \
   "DBFWTools.dmg" \
   "dist/" \
@@ -78,11 +83,12 @@ create-dmg \
 create-dmg \
   --volname "Dragon Ball Fusion World Tools" \
   --window-pos 200 120 \
-  --window-size 660 400 \
+  --window-size 660 460 \
   --icon-size 128 \
   --icon "DBFWTools.app" 180 185 \
   --hide-extension "DBFWTools.app" \
   --app-drop-link 480 185 \
+  --icon "uninstall_mac.command" 330 360 \
   --no-internet-enable \
   "DBFWTools.dmg" \
   "dist/"
