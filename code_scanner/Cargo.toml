@@ -1,0 +1,17 @@
+[package]
+name = "code_scanner"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1"
+eframe = "0.33"
+egui = "0.33"
+image = "0.25"
+leptess = "0.14"
+opencv = { version = "0.98", features = ["clang-runtime"] }
+regex = "1"
+rfd = "0.15"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
