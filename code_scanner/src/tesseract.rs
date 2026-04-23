@@ -20,14 +20,18 @@ pub fn ensure_tesseract_ready() -> Result<()> {
     configure_tesseract_environment()?;
 
     if let Some(prefix) = std::env::var_os("TESSDATA_PREFIX") {
-        let eng = Path::new(&prefix).join("eng.traineddata");
-        if eng.exists() {
+        let prefix_path = PathBuf::from(prefix);
+
+        let direct = prefix_path.join("eng.traineddata");
+        let nested = prefix_path.join("tessdata").join("eng.traineddata");
+
+        if direct.exists() || nested.exists() {
             return Ok(());
         }
     }
 
     Err(anyhow!(
-        "Tesseract is not ready. Set TESSDATA_PREFIX or place eng.traineddata in a bundled tessdata directory."
+        "Tesseract is not ready. Set TESSDATA_PREFIX to a tessdata directory or place eng.traineddata in a bundled tessdata directory."
     ))
 }
 
@@ -37,9 +41,15 @@ fn find_tessdata_dir() -> Option<PathBuf> {
     if let Ok(exe) = std::env::current_exe() {
         if let Some(exe_dir) = exe.parent() {
             candidates.push(exe_dir.join("tessdata"));
+            candidates.push(exe_dir.join("bundled").join("tessdata"));
             candidates.push(exe_dir.join("resources").join("tessdata"));
             candidates.push(exe_dir.join("../Resources/tessdata"));
         }
+    }
+
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join("tessdata"));
+        candidates.push(cwd.join("bundled").join("tessdata"));
     }
 
     candidates.push(PathBuf::from("/opt/homebrew/share/tessdata"));

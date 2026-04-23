@@ -1,5 +1,7 @@
+use crate::camera::camera_feature_status;
 use crate::export::export_codes_to_file;
 use crate::scanner::{scan_image_file, ScanResult};
+use crate::vision_bridge::detect_cards_with_helper;
 use eframe::egui;
 use rfd::FileDialog;
 use std::collections::BTreeSet;
@@ -30,7 +32,10 @@ impl CardCodeScannerApp {
             return;
         }
 
-        self.status = format!("Scanning {} file(s)...", self.selected_files.len());
+        self.status = format!(
+            "Scanning {} file(s) using packaged vision helper...",
+            self.selected_files.len()
+        );
         self.results.clear();
 
         for file in &self.selected_files {
@@ -52,7 +57,6 @@ impl CardCodeScannerApp {
             total_codes
         );
     }
-
 
     fn export_codes(&mut self) {
         let mut unique_codes = BTreeSet::new();
@@ -80,6 +84,24 @@ impl CardCodeScannerApp {
             }
         }
     }
+
+    fn helper_health_check(&mut self) {
+        if let Some(first) = self.selected_files.first() {
+            match detect_cards_with_helper(first) {
+                Ok(resp) => {
+                    self.status = format!(
+                        "Vision helper reachable. {} card crop(s) returned for sample file.",
+                        resp.cards.len()
+                    );
+                }
+                Err(err) => {
+                    self.status = format!("Vision helper check failed: {err}");
+                }
+            }
+        } else {
+            self.status = "Select at least one image before testing the helper.".to_string();
+        }
+    }
 }
 
 impl eframe::App for CardCodeScannerApp {
@@ -88,6 +110,10 @@ impl eframe::App for CardCodeScannerApp {
             ui.horizontal(|ui| {
                 if ui.button("Upload Images").clicked() {
                     self.pick_files();
+                }
+
+                if ui.button("Test Helper").clicked() {
+                    self.helper_health_check();
                 }
 
                 if ui.button("Scan Images").clicked() {
@@ -101,6 +127,7 @@ impl eframe::App for CardCodeScannerApp {
 
             ui.separator();
             ui.label(format!("Status: {}", self.status));
+            ui.small(format!("Camera: {}", camera_feature_status()));
         });
 
         egui::SidePanel::left("left_panel")
@@ -146,7 +173,7 @@ impl eframe::App for CardCodeScannerApp {
 
                             if !result.raw_text_preview.is_empty() {
                                 ui.separator();
-                                ui.collapsing("OCR Preview", |ui| {
+                                ui.collapsing("OCR / Helper Preview", |ui| {
                                     ui.monospace(&result.raw_text_preview);
                                 });
                             }

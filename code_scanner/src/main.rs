@@ -5,6 +5,7 @@ mod image_utils;
 mod ocr;
 mod scanner;
 mod tesseract;
+mod vision_bridge;
 
 use app::CardCodeScannerApp;
 
