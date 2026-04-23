@@ -231,7 +231,7 @@ begin
   end;
 end;
 
-{ Called by [Run] entries via {code:GetPythonExe} }
+{ Called by [Run] entries via the code: GetPythonExe parameter }
 function GetPythonExe(Param: string): string;
 begin
   Result := PythonExePath;
@@ -261,43 +261,43 @@ begin
   Result :=
     'WHAT THIS INSTALLER WILL SET UP' + #13#10 +
     '================================================================' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'PYTHON  (required runtime)' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     PythonBlock + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'PYTHON PACKAGES  (installed into an isolated environment)' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  These packages are installed inside a private .venv folder' + #13#10 +
     '  in the app directory. They are completely isolated and will' + #13#10 +
     '  NOT affect any other Python programs on your computer.' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '  google-genai    AI image analysis via Google Gemini' + #13#10 +
     '  Pillow          image file reading and processing' + #13#10 +
     '  tkinterdnd2     drag-and-drop file support' + #13#10 +
     '  pyautogui       keyboard / mouse automation  (Redeemer tab)' + #13#10 +
     '  pygetwindow     game window detection' + #13#10 +
     '  requests        Discord API communication' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'APP FILES' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  Source code, the .venv folder, and the app launcher will be' + #13#10 +
     '  installed to the folder you choose on the next screen.' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'DISK SPACE REQUIRED' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  Python packages (downloaded during install)   ~250 MB' + #13#10 +
     '  Application source code                         ~1 MB' + #13#10 +
     '  Python itself (only if not already installed)  ~80 MB' + #13#10 +
     '  Total estimate: ~270 MB (Python present) or ~350 MB (new install)' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'CONFIGURATION  (written automatically on first launch)' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  ' + HomeDir + '\.dbfw_tools\' + #13#10 +
     '    config.json    Gemini API key and Discord settings' + #13#10 +
     '    scanner.log    Scanner activity log  (max 1 MB, rotating)' + #13#10 +
     '    redeemer.log   Redeemer activity log  (max 1 MB, rotating)' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '================================================================' + #13#10 +
     'Click Next to continue.  Click Cancel at any time to abort.';
 end;
@@ -322,9 +322,9 @@ begin
       '  Location: ' + PythonExePath;
 
   ShortcutLines := '';
-  if IsTaskSelected('desktopicon') then
+  if WizardIsTaskSelected('desktopicon') then
     ShortcutLines := ShortcutLines + '  Desktop shortcut     Created' + #13#10;
-  if IsTaskSelected('startmenuicon') then
+  if WizardIsTaskSelected('startmenuicon') then
     ShortcutLines := ShortcutLines + '  Start Menu shortcut  Created' + #13#10;
   if ShortcutLines = '' then
     ShortcutLines := '  No shortcuts were created.' + #13#10;
@@ -332,39 +332,39 @@ begin
   Result :=
     'INSTALLATION SUMMARY' + #13#10 +
     '================================================================' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'PYTHON' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     PythonLine + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'APPLICATION FILES' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  ' + AppDir + '\' + #13#10 +
     '    main.py           app entry point' + #13#10 +
     '    requirements.txt  package list' + #13#10 +
     '    src\              application source code' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'PYTHON VIRTUAL ENVIRONMENT' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  ' + AppDir + '\.venv\' + #13#10 +
     '  Packages: google-genai, Pillow, tkinterdnd2, pyautogui,' + #13#10 +
     '            pygetwindow, requests' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'APP LAUNCHER  (runs the app with no console window)' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  ' + AppDir + '\launch.vbs' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'SHORTCUTS' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     ShortcutLines +
-    #13#10 +
+    '' + #13#10 +
     'CONFIGURATION  (created on first launch)' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     '  ' + HomeDir + '\.dbfw_tools\' + #13#10 +
     '    config.json    stores your Gemini API key + Discord settings' + #13#10 +
     '    scanner.log    Scanner activity log' + #13#10 +
     '    redeemer.log   Redeemer activity log' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '================================================================' + #13#10 +
     'TO UNINSTALL:' + #13#10 +
     '  Settings -> Apps -> Dragon Ball Fusion World Tools -> Uninstall' + #13#10 +
@@ -396,10 +396,10 @@ end;
 
 procedure CurPageChanged(CurPageID: Integer);
 begin
-  { Fill in exact paths once the user navigates to the summary page.
-    By this point ssPostInstall has already run and {app} is known. }
+  // Fill in exact paths once the user navigates to the summary page.
+  // By this point ssPostInstall has already run and {app} is known.
   if CurPageID = SummaryPage.ID then
-    SummaryPage.RichEditViewer.Lines.Text := BuildSummaryPageText();
+    SummaryPage.MsgLabel.Caption := BuildSummaryPageText();
 end;
 
 // ── Python download and silent install ────────────────────────────────────────
@@ -594,40 +594,40 @@ begin
   Msg :=
     'UNINSTALL — Dragon Ball Fusion World Tools' + #13#10 +
     '================================================================' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'The following will be permanently removed from your computer:' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '  Application files' + #13#10 +
     '    ' + UninstallAppDir + '\' + #13#10 +
     '    (source code and app launcher)' + #13#10 +
-    #13#10;
+    '' + #13#10;
 
   if UninstallVenvExisted then
     Msg := Msg +
       '  Python virtual environment  (all installed packages)' + #13#10 +
       '    ' + UninstallVenvDir + '\' + #13#10 +
       '    Note: this folder may be several hundred MB.' + #13#10 +
-      #13#10;
+      '' + #13#10;
 
   if UninstallCfgExisted then
     Msg := Msg +
       '  Configuration and log files  (you will be asked separately)' + #13#10 +
       '    ' + UninstallConfigDir + '\' + #13#10 +
       '    (Gemini API key, Discord settings, log files)' + #13#10 +
-      #13#10;
+      '' + #13#10;
 
   Msg := Msg +
     '  Desktop and Start Menu shortcuts  (if they were created)' + #13#10 +
     '  Add/Remove Programs entry' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '----------------------------------------------------------------' + #13#10 +
     'Python itself will NOT be removed.' + #13#10 +
     'To uninstall Python: Settings -> Apps -> search "Python"' + #13#10 +
     '================================================================' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     'Click Yes to begin the uninstall process.' + #13#10 +
     'Click No to cancel and keep the application.' + #13#10 +
-    #13#10 +
+    '' + #13#10 +
     '(You will be asked about your saved settings on the next screen.)';
 
   // Default button is No — the user must actively choose Yes.
@@ -641,9 +641,9 @@ begin
     KeepCfg := (MsgBox(
       'Your saved settings are stored at:' + #13#10 +
       '  ' + UninstallConfigDir + #13#10 +
-      #13#10 +
+      '' + #13#10 +
       'This folder contains your Gemini API key and Discord settings.' + #13#10 +
-      #13#10 +
+      '' + #13#10 +
       'Delete these settings?' + #13#10 +
       '  Yes = remove everything  (full clean uninstall)' + #13#10 +
       '  No  = keep your API key  (useful if you plan to reinstall)',
@@ -681,12 +681,12 @@ begin
       SummaryMsg :=
         'UNINSTALL COMPLETE' + #13#10 +
         '================================================================' + #13#10 +
-        #13#10 +
+        '' + #13#10 +
         'The following have been removed from your computer:' + #13#10 +
-        #13#10 +
+        '' + #13#10 +
         '  Application files' + #13#10 +
         '    ' + UninstallAppDir + '\       REMOVED' + #13#10 +
-        #13#10;
+        '' + #13#10;
 
       if UninstallVenvExisted then
       begin
@@ -723,7 +723,7 @@ begin
       SummaryMsg := SummaryMsg +
         '  Shortcuts (if they existed)      REMOVED' + #13#10 +
         '  Add/Remove Programs entry        REMOVED' + #13#10 +
-        #13#10 +
+        '' + #13#10 +
         '================================================================' + #13#10 +
         'Python was NOT uninstalled.' + #13#10 +
         'To remove Python: Settings -> Apps -> search "Python"' + #13#10 +
