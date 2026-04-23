@@ -1,0 +1,131 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows: single-file .exe ─────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: dbfw_tools
+        run: |
+          python -m venv .venv
+          .venv\Scripts\pip install -r requirements.txt
+
+      - name: Build executable
+        working-directory: dbfw_tools
+        run: >
+          .venv\Scripts\pyinstaller
+          --onefile --windowed --name DBFWTools
+          --hidden-import google.genai
+          --hidden-import google.auth
+          --hidden-import google.auth.transport.requests
+          --hidden-import PIL._tkinter_finder
+          --hidden-import pygetwindow
+          --hidden-import pyautogui
+          --collect-all google.genai
+          --collect-all tkinterdnd2
+          main.py
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: dbfw_tools/dist/DBFWTools.exe
+
+  # ── macOS: .app bundle → DMG ──────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        working-directory: dbfw_tools
+        run: |
+          python -m venv .venv
+          .venv/bin/pip install -r requirements.txt
+
+      - name: Build app bundle
+        working-directory: dbfw_tools
+        run: |
+          .venv/bin/pyinstaller \
+            --windowed --name DBFWTools \
+            --hidden-import google.genai \
+            --hidden-import google.auth \
+            --hidden-import google.auth.transport.requests \
+            --hidden-import PIL._tkinter_finder \
+            --hidden-import pygetwindow \
+            --hidden-import pyautogui \
+            --collect-all google.genai \
+            --collect-all tkinterdnd2 \
+            main.py
+
+      - name: Create DMG
+        working-directory: dbfw_tools
+        run: |
+          brew install create-dmg
+          create-dmg \
+            --volname "Dragon Ball Fusion World Tools" \
+            --window-pos 200 120 \
+            --window-size 600 400 \
+            --icon-size 128 \
+            --icon "DBFWTools.app" 180 185 \
+            --hide-extension "DBFWTools.app" \
+            --app-drop-link 420 185 \
+            --no-internet-enable \
+            "DBFWTools-Mac.dmg" \
+            "dist/" || \
+          zip -r "DBFWTools-Mac.zip" "dist/DBFWTools.app"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-pkg
+          if-no-files-found: warn
+          path: |
+            dbfw_tools/DBFWTools-Mac.dmg
+            dbfw_tools/DBFWTools-Mac.zip
+
+  # ── Publish GitHub Release ────────────────────────────────────────────────
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+          path: release/
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos-pkg
+          path: release/
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*
+          body: |
+            ## Download
+
+            | Platform | File | Notes |
+            |----------|------|-------|
+            | Windows | `DBFWTools.exe` | Double-click to run — no install required |
+            | macOS | `DBFWTools-Mac.dmg` | Open and drag to Applications |
+
+            > **macOS first launch:** Right-click the app → **Open** to bypass the Gatekeeper warning. This is a one-time step.

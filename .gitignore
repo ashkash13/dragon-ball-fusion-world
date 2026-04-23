@@ -33,6 +33,7 @@ Thumbs.db
 .dbfw_scanner/
 
 # ── Tool outputs (generated files, not source) ────────────────────────────────
+installer_output/
 
 # codes files (scanner output + redeemer results — generated, not source)
 codes*.txt
