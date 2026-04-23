@@ -27,11 +27,12 @@ from PIL import Image, ImageTk
 
 from src.logger import (
     get_scanner_logger, get_redeemer_logger,
-    scanner_log_path, redeemer_log_path,
+    scanner_log_path, redeemer_log_path, set_log_dir,
 )
 from src.scanner.config import (
     load_api_key, save_api_key,
     load_discord_config, save_discord_config, save_discord_last_message_id,
+    load_output_dir, save_output_dir,
 )
 from src.scanner.discord_client import DiscordClient, DiscordError
 from src.scanner.gemini_client import GeminiClient
@@ -348,6 +349,21 @@ class ScannerTab:
         ttk.Button(inner, text="Clear All", command=self._clear_codes).pack(fill="x", pady=2)
         ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=6)
         ttk.Button(inner, text="Change API Key", command=self._change_api_key).pack(fill="x", pady=2)
+
+        ttk.Separator(inner, orient="horizontal").pack(fill="x", pady=6)
+        ttk.Label(inner, text="Output Folder", font=("Helvetica", 9, "bold")).pack(anchor="w")
+        ttk.Label(
+            inner,
+            text="Where logs, codes, and results are saved.",
+            font=("Helvetica", 8), foreground="#555555", wraplength=SIDEBAR_W - 20,
+        ).pack(anchor="w", pady=(0, 4))
+        self._output_dir_var = tk.StringVar(value=str(load_output_dir()))
+        ttk.Label(
+            inner, textvariable=self._output_dir_var,
+            font=("Courier", 8), foreground="#333333",
+            wraplength=SIDEBAR_W - 20, justify="left",
+        ).pack(anchor="w", pady=(0, 4))
+        ttk.Button(inner, text="Change Folder…", command=self._change_output_dir).pack(fill="x", pady=2)
 
     # ── File list state ───────────────────────────────────────────────────────
 
@@ -866,10 +882,13 @@ class ScannerTab:
         if not self._codes:
             messagebox.showinfo("Nothing to Export", "Collect some codes first.")
             return
+        output_dir = load_output_dir()
+        output_dir.mkdir(parents=True, exist_ok=True)
         path = filedialog.asksaveasfilename(
             title="Save codes",
             defaultextension=".txt",
             initialfile="codes.txt",
+            initialdir=str(output_dir),
             filetypes=[("Text file", "*.txt"), ("All files", "*.*")],
         )
         if not path:
@@ -902,6 +921,30 @@ class ScannerTab:
     def _change_api_key(self) -> None:
         self._log.info("User requested API key change")
         self._build_setup_ui()
+
+    def _change_output_dir(self) -> None:
+        current = load_output_dir()
+        new_dir = filedialog.askdirectory(
+            title="Choose Output Folder for Logs, Codes, and Results",
+            initialdir=str(current) if current.exists() else str(Path.home()),
+            mustexist=False,
+        )
+        if not new_dir:
+            return
+        path = Path(new_dir)
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            messagebox.showerror("Error", f"Could not create folder:\n{exc}")
+            return
+        save_output_dir(path)
+        set_log_dir(path)
+        self._output_dir_var.set(str(path))
+        self._log.info("Output folder changed to %s", path)
+        messagebox.showinfo(
+            "Output Folder Updated",
+            f"Output folder set to:\n{path}\n\nLogs, codes, and results will be saved here.",
+        )
 
     def _clear(self) -> None:
         for widget in self._frame.winfo_children():
@@ -1270,7 +1313,13 @@ class RedeemerTab:
         if not self._codes_path or not self._results:
             return None
         ts = datetime.datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        out = self._codes_path.parent / f"{self._codes_path.stem}_results_{ts}.txt"
+        output_dir = load_output_dir()
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as exc:
+            self._log.error("Could not create output dir %s: %s", output_dir, exc)
+            output_dir = self._codes_path.parent  # fall back to codes file location
+        out = output_dir / f"{self._codes_path.stem}_results_{ts}.txt"
         try:
             lines = [f"{code}  {result}" for code, result in self._results]
             out.write_text("\n".join(lines) + "\n", encoding="utf-8")

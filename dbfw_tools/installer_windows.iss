@@ -123,34 +123,87 @@ end;
 
 // ── Python detection ──────────────────────────────────────────────────────────
 
-function FindPythonInRegistry(): string;
-{ Searches HKCU then HKLM for Python 3.14, 3.13, 3.12, 3.11 (newest first).
-  Returns the full path to python.exe, or empty string if not found. }
+function ExtractLeadingInt(S: string; Default: Integer): Integer;
+{ Returns the integer value of the leading digit characters in S.
+  Stops at the first non-digit. Returns Default if no digits are found.
+  Example: "14-32" → 14,  "11" → 11,  "foo" → Default. }
 var
-  Versions: array[0..3] of string;
+  NumStr: string;
   I: Integer;
-  InstallPath, ExePath: string;
 begin
-  Result := '';
-  Versions[0] := '3.14';
-  Versions[1] := '3.13';
-  Versions[2] := '3.12';
-  Versions[3] := '3.11';
-
-  for I := 0 to 3 do
+  NumStr := '';
+  for I := 1 to Length(S) do
   begin
-    InstallPath := '';
-    if RegQueryStringValue(HKCU, 'SOFTWARE\Python\PythonCore\' + Versions[I] + '\InstallPath', '', InstallPath) or
-       RegQueryStringValue(HKLM, 'SOFTWARE\Python\PythonCore\' + Versions[I] + '\InstallPath', '', InstallPath) then
+    if (S[I] >= '0') and (S[I] <= '9') then
+      NumStr := NumStr + S[I]
+    else
+      Break;
+  end;
+  if NumStr = '' then
+    Result := Default
+  else
+    Result := StrToIntDef(NumStr, Default);
+end;
+
+function FindPythonInRegistry(): string;
+{ Dynamically enumerates ALL Python versions installed on this machine
+  (both per-user HKCU and system-wide HKLM) and returns the path to
+  python.exe for the highest version that is >= 3.11.
+
+  Works for any future Python release without requiring installer updates:
+  3.15, 3.16, 3.20, etc. are all discovered automatically.
+
+  Handles 32-bit variants (e.g. key "3.14-32") and skips pre-release keys
+  that cannot be parsed as a plain minor version number. }
+var
+  Hives:       array[0..1] of Integer;
+  Subkeys:     TArrayOfString;
+  J, I:        Integer;
+  DotPos:      Integer;
+  VerStr:      string;
+  InstallPath, ExePath: string;
+  CurMinor, BestMinor:  Integer;
+begin
+  Result    := '';
+  BestMinor := 10;   // anything found must be > 3.10 (i.e. 3.11+)
+
+  Hives[0] := HKCU;
+  Hives[1] := HKLM;
+
+  for J := 0 to 1 do
+  begin
+    if not RegGetSubkeyNames(Hives[J], 'SOFTWARE\Python\PythonCore', Subkeys) then
+      Continue;
+
+    for I := 0 to GetArrayLength(Subkeys) - 1 do
     begin
+      VerStr := Subkeys[I];   // e.g. "3.14"  or  "3.14-32"
+
+      // Must start with "3."
+      DotPos := Pos('.', VerStr);
+      if (DotPos < 2) or (Copy(VerStr, 1, DotPos - 1) <> '3') then
+        Continue;
+
+      // Extract minor version from the text after the dot ("14" from "3.14-32")
+      CurMinor := ExtractLeadingInt(Copy(VerStr, DotPos + 1, Length(VerStr)), -1);
+      if CurMinor <= BestMinor then
+        Continue;   // not newer than what we already have (or below 3.11)
+
+      // Verify python.exe actually exists at this registry entry
+      InstallPath := '';
+      if not (RegQueryStringValue(Hives[J],
+                'SOFTWARE\Python\PythonCore\' + VerStr + '\InstallPath',
+                '', InstallPath)) then
+        Continue;
       if (Length(InstallPath) > 0) and (InstallPath[Length(InstallPath)] <> '\') then
         InstallPath := InstallPath + '\';
       ExePath := InstallPath + 'python.exe';
-      if FileExists(ExePath) then
-      begin
-        Result := ExePath;
-        Exit;
-      end;
+      if not FileExists(ExePath) then
+        Continue;
+
+      // New best match
+      BestMinor := CurMinor;
+      Result    := ExePath;
     end;
   end;
 end;
