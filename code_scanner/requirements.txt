@@ -1,0 +1,7 @@
+# Runtime dependencies
+google-genai>=1.0.0
+opencv-python>=4.10.0
+Pillow>=10.0.0
+
+# Build dependency (not needed at runtime)
+pyinstaller>=6.0.0
